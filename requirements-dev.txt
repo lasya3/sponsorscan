@@ -1,0 +1,3 @@
+# Test dependencies. Not needed to run sponsorscan.
+-r requirements.txt
+pytest>=8.0
