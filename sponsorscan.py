@@ -791,6 +791,29 @@ def cmd_report(args):
         print(f"      {r['url']}\n")
 
 
+# ---------------------------------------------------------------------- doctor
+
+def cmd_doctor(args):
+    """Report which pipeline stage needs attention.
+
+    The checks live in onboarding.py as pure functions; this only supplies the
+    paths, the environment and the date, then prints and sets the exit code.
+    """
+    import datetime
+
+    import onboarding
+
+    results = onboarding.run_checks(
+        db_path=args.db or DB_PATH,
+        companies_path=args.companies,
+        profile_path=args.profile,
+        env=os.environ,
+        today=datetime.date.today())
+
+    print(onboarding.format_results(results))
+    raise SystemExit(onboarding.exit_code(results))
+
+
 # ------------------------------------------------------------------------ main
 
 def main():
@@ -838,6 +861,15 @@ def main():
                    help="Drop employers with no certified LCAs on record")
     c.add_argument("--fuzzy-cutoff", type=int, default=90)
     c.set_defaults(func=cmd_report)
+
+    doc = sub.add_parser("doctor",
+                         help="Check each pipeline stage and report what to fix")
+    doc.add_argument("--profile", default=None,
+                     help="Profile to validate; omitted skips the profile checks")
+    doc.add_argument("--companies", default="companies.yaml")
+    doc.add_argument("--db", default=None,
+                     help="Database to inspect; defaults to SPONSORSCAN_DB or ./sponsorscan.db")
+    doc.set_defaults(func=cmd_doctor)
 
     args = p.parse_args()
     args.func(args)

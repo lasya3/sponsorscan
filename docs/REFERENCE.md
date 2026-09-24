@@ -100,6 +100,32 @@ The report defaults to locations anywhere in the United States. Pass
 The generated CSV is written in the current folder. It can be opened directly in
 Excel or imported into Google Sheets.
 
+## Checking a setup
+
+```powershell
+python sponsorscan.py doctor
+```
+
+Every stage of the pipeline is long-running and cached, so a misconfiguration
+usually surfaces as an empty CSV rather than an error. `doctor` inspects each
+stage in order and reports the first one that needs attention, while still
+running the rest so a single invocation shows the whole picture.
+
+| Flag | Effect |
+|---|---|
+| `--profile profiles/yours.json` | Also validate a profile and warn about contradictory settings; omitted skips the profile checks |
+| `--db path/to/sponsorscan.db` | Inspect a database other than `./sponsorscan.db`; `SPONSORSCAN_DB` also works |
+| `--companies path/to/companies.yaml` | Inspect a company list other than `./companies.yaml` |
+
+It reports `FAIL` for a stage that blocks a run, and `WARN` for something that
+degrades results without stopping them: stale postings, a `minimum_score` set
+high enough to empty the report, a profile with no roles or skills, a
+`work_authorization` that contradicts the `reject_*` flags, or notifications
+enabled in the profile without the matching environment variables.
+
+The exit code is 1 when any check fails and 0 otherwise, so it also works as a
+preflight step in CI.
+
 ## What the score means
 
 | Signal | Points |

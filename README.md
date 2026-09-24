@@ -93,7 +93,7 @@ This takes a few minutes. Re-run it when the DOL publishes a new quarterly file.
 python sponsorscan.py fetch-jobs --replace
 ```
 
-`companies.yaml` already ships with roughly 30 confirmed job boards, so this
+`companies.yaml` already ships with 19 confirmed job boards, so this
 works immediately. There is no list to build first.
 
 ### 3. Generate the report
@@ -118,6 +118,16 @@ python sponsorscan.py discover
 The first run can take a long time, because it may perform thousands of HTTP
 probes. Results are cached in the database as they land, so `Ctrl+C` is safe and
 a later run resumes from the cache. Skip this until you want broader coverage.
+
+### Something not working?
+
+```powershell
+python sponsorscan.py doctor
+```
+
+Checks every stage and names the one that needs attention, instead of leaving
+you with an empty CSV and no explanation. Add `--profile profiles/yours.json`
+to validate a profile at the same time.
 
 ## Where to go next
 

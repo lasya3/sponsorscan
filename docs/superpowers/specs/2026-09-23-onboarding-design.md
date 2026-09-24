@@ -1,7 +1,7 @@
 # SponsorScan onboarding redesign
 
 Date: 2026-09-23
-Status: approved, not yet implemented
+Status: sections 1 and 2 implemented; sections 3 and 4 outstanding
 
 ## Problem
 
@@ -34,7 +34,7 @@ Two concrete defects make this worse:
   `profiles/opt_profile.example.json`. The file is named
   `profiles/opt_profiles.example.json`. The first command in the guide fails.
 - `README.md` presents `discover` as mandatory step 2, though `companies.yaml`
-  already ships roughly 30 verified boards. Users spend hours on a step they
+  already ships 19 verified boards. Users spend hours on a step they
   could defer.
 
 A third defect, missing `requirements-dev.txt` and `requirements-sheets.txt`,
@@ -79,7 +79,7 @@ the repository.
 ### 1.2 Document that `discover` is optional
 
 Add a note to the `discover` section of `README.md` stating that
-`companies.yaml` ships with roughly 30 confirmed boards, that a first run can
+`companies.yaml` ships with 19 confirmed boards, that a first run can
 proceed directly to `fetch-jobs`, and that `discover` exists to widen coverage
 later.
 
@@ -120,7 +120,7 @@ optional remedy line.
 
 | # | Check | FAIL condition | Remedy shown |
 |---|---|---|---|
-| 1 | Dependencies importable | `requests`, `yaml`, `openpyxl`, or `rapidfuzz` missing | `pip install -r requirements.txt` |
+| 1 | Required modules importable | `requests` or `yaml` missing | `pip install -r requirements.txt` |
 | 2 | Database present | `DB_PATH` does not exist | `python sponsorscan.py load-lca <file>` |
 | 3 | LCA data loaded | `employers` table empty or absent | `python sponsorscan.py load-lca <file> --replace` |
 | 4 | Jobs fetched | `jobs` table empty or absent | `python sponsorscan.py fetch-jobs --replace` |
@@ -131,6 +131,7 @@ Warnings, which never fail the run:
 
 | Check | WARN condition | Message |
 |---|---|---|
+| Optional modules | `openpyxl` or `rapidfuzz` missing | names each and what degrades. `rapidfuzz` is guarded by `HAVE_RAPIDFUZZ` and `openpyxl` is imported lazily for `.xlsx` only, so neither is fatal |
 | Job freshness | newest `jobs.posted` older than 7 days | postings are stale; re-run `fetch-jobs` |
 | Score threshold | `minimum_score` above 130 | few jobs reach this; most land between 95 and 120 |
 | Empty targeting | `target_roles` or `skills` empty | every posting will be treated the same way |
@@ -161,7 +162,7 @@ $ python sponsorscan.py doctor --profile profiles/my_profile.json
   OK    LCA data loaded (48,201 employers)
   FAIL  No jobs fetched
         -> python sponsorscan.py fetch-jobs --replace
-  OK    companies.yaml valid (31 boards across 3 providers)
+  OK    companies.yaml valid (19 boards across 3 providers)
   OK    Profile valid (my_profile, opt)
   WARN  minimum_score is 140; most matches score 95-120
 
