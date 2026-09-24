@@ -14,7 +14,9 @@ from onboarding import (
     format_results,
     build_profile,
     collect_answers,
+    find_lca_links,
     format_prompt,
+    latest_lca_link,
     run_setup,
     save_profile,
     run_checks,
@@ -621,3 +623,120 @@ def test_long_defaults_are_not_repeated_in_brackets():
     rendered = format_prompt("Roles", long_default)
     assert long_default not in rendered
     assert rendered.endswith(": ")
+
+
+# =================================================== resolving the DOL download
+
+DOL_PAGE = """
+<html><body>
+  <h2>Disclosure Data</h2>
+  <a href="/sites/dolgov/files/ETA/oflc/pdfs/LCA_Disclosure_Data_FY2025_Q4.xlsx">FY2025 Q4</a>
+  <a href="/sites/dolgov/files/ETA/oflc/pdfs/LCA_Disclosure_Data_FY2026_Q1.xlsx">FY2026 Q1</a>
+  <a href="/sites/dolgov/files/ETA/oflc/pdfs/LCA_Disclosure_Data_FY2026_Q2.xlsx">FY2026 Q2</a>
+  <a href="/sites/dolgov/files/ETA/oflc/pdfs/PERM_Disclosure_Data_FY2026_Q2.xlsx">PERM, not LCA</a>
+  <a href="/some/other/page.html">Unrelated</a>
+</body></html>
+"""
+
+BASE = "https://www.dol.gov/agencies/eta/foreign-labor/performance"
+
+
+def test_finds_only_lca_disclosure_links():
+    links = find_lca_links(DOL_PAGE, BASE)
+    assert len(links) == 3
+    assert all("LCA_Disclosure_Data" in link["url"] for link in links)
+    assert not any("PERM" in link["url"] for link in links)
+
+
+def test_relative_hrefs_become_absolute_urls():
+    links = find_lca_links(DOL_PAGE, BASE)
+    assert all(link["url"].startswith("https://www.dol.gov/") for link in links)
+
+
+def test_picks_the_newest_fiscal_year_and_quarter():
+    assert latest_lca_link(DOL_PAGE, BASE).endswith("LCA_Disclosure_Data_FY2026_Q2.xlsx")
+
+
+def test_a_later_fiscal_year_beats_a_higher_quarter():
+    page = """
+      <a href="/x/LCA_Disclosure_Data_FY2025_Q4.xlsx">old year, late quarter</a>
+      <a href="/x/LCA_Disclosure_Data_FY2026_Q1.xlsx">new year, early quarter</a>
+    """
+    assert latest_lca_link(page, BASE).endswith("FY2026_Q1.xlsx")
+
+
+def test_no_matching_link_returns_none_rather_than_raising():
+    assert latest_lca_link("<html><body>nothing here</body></html>", BASE) is None
+
+
+def test_case_and_separator_variations_still_match():
+    page = '<a href="/x/lca_disclosure_data_fy2026_q3.xlsx">lowercase</a>'
+    assert latest_lca_link(page, BASE).endswith("fy2026_q3.xlsx")
+
+
+def run_cli(*argv):
+    import subprocess
+    import sys
+    from pathlib import Path
+    repo = Path(__file__).resolve().parent.parent
+    return subprocess.run([sys.executable, str(repo / "sponsorscan.py"), *argv],
+                          capture_output=True, text=True, cwd=str(repo))
+
+
+def test_load_lca_advertises_the_latest_flag():
+    result = run_cli("load-lca", "--help")
+    assert result.returncode == 0
+    assert "--latest" in result.stdout
+
+
+def test_latest_and_an_explicit_path_are_mutually_exclusive():
+    result = run_cli("load-lca", "--latest", "somefile.xlsx")
+    assert result.returncode != 0
+    combined = result.stdout + result.stderr
+    # argparse rejects the combination, not the flag itself
+    assert "not allowed with" in combined
+    assert "unrecognized" not in combined
+
+
+def test_load_lca_without_a_path_or_latest_explains_itself():
+    result = run_cli("load-lca")
+    assert result.returncode != 0
+    combined = (result.stdout + result.stderr).lower()
+    assert "--latest" in combined
+
+
+def test_absolute_hrefs_are_preserved():
+    # The live DOL page mixes relative paths with fully-qualified URLs, and the
+    # newest file is currently one of the absolute ones.
+    page = '<a href="https://www.dol.gov//media/LCA_Disclosure_Data_FY2026_Q3.xlsx">FY2026 Q3</a>'
+    assert latest_lca_link(page, BASE) == (
+        "https://www.dol.gov//media/LCA_Disclosure_Data_FY2026_Q3.xlsx")
+
+
+def test_absolute_and_relative_links_are_ranked_together():
+    page = """
+      <a href="https://www.dol.gov//media/LCA_Disclosure_Data_FY2026_Q3.xlsx">newest, absolute</a>
+      <a href="/sites/dolgov/files/ETA/oflc/pdfs/LCA_Disclosure_Data_FY2025_Q4.xlsx">older, relative</a>
+    """
+    assert latest_lca_link(page, BASE).endswith("FY2026_Q3.xlsx")
+
+
+def test_download_filename_survives_a_doubled_slash():
+    # os.path.basename returns "" for this on Windows, treating the doubled
+    # slash as a UNC path, so the download would be misnamed.
+    from onboarding import local_filename_for
+    assert local_filename_for(
+        "https://www.dol.gov//media/LCA_Disclosure_Data_FY2026_Q3.xlsx"
+    ) == "LCA_Disclosure_Data_FY2026_Q3.xlsx"
+
+
+def test_download_filename_handles_an_ordinary_path():
+    from onboarding import local_filename_for
+    assert local_filename_for(
+        "https://www.dol.gov/sites/x/LCA_Disclosure_Data_FY2025_Q4.xlsx"
+    ) == "LCA_Disclosure_Data_FY2025_Q4.xlsx"
+
+
+def test_download_filename_falls_back_when_the_url_has_no_file():
+    from onboarding import local_filename_for
+    assert local_filename_for("https://www.dol.gov/") == "lca_download.xlsx"

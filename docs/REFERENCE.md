@@ -41,6 +41,20 @@ states in which they filed.
 
 Re-run this step when the DOL publishes a new quarterly disclosure file.
 
+### Resolving the file automatically
+
+```powershell
+python sponsorscan.py load-lca --latest --replace
+```
+
+`--latest` reads the DOL performance page, picks the highest fiscal year and
+quarter among the linked LCA disclosure files, prints the URL it resolved, and
+asks before downloading. It cannot be combined with an explicit path.
+
+The DOL restructuring that page is the expected failure, so a lookup that finds
+nothing exits with the manual instructions rather than a traceback, and passing
+a path by hand keeps working exactly as before.
+
 ## 2. Build the company list
 
 ```powershell

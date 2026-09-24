@@ -168,10 +168,52 @@ def _iter_rows(path):
                 yield row
 
 
+def _resolve_latest_lca():
+    """Find the newest LCA disclosure file linked from the DOL page.
+
+    Returns the URL, or exits with the manual instructions. A DOL redesign is
+    the expected failure here, so it must not surface as a traceback.
+    """
+    import onboarding
+
+    print(f"Looking for the newest disclosure file on {onboarding.DOL_PERFORMANCE_PAGE}")
+    try:
+        r = requests.get(onboarding.DOL_PERFORMANCE_PAGE, headers=UA, timeout=60)
+        r.raise_for_status()
+        url = onboarding.latest_lca_link(r.text, onboarding.DOL_PERFORMANCE_PAGE)
+    except requests.RequestException as exc:
+        url = None
+        print(f"Could not reach the DOL site: {exc}")
+
+    if not url:
+        raise SystemExit(
+            "Could not resolve a disclosure link automatically.\n"
+            f"Open {onboarding.DOL_PERFORMANCE_PAGE}, download the most recent\n"
+            "'LCA Programs (H-1B, H-1B1, E-3)' file, then run:\n"
+            "  python sponsorscan.py load-lca <downloaded file> --replace")
+
+    print(f"Found {url}")
+    if sys.stdin.isatty():
+        reply = input("Download this file? (Y/n): ").strip().lower()
+        if reply.startswith("n"):
+            raise SystemExit("Cancelled.")
+    return url
+
+
 def cmd_load_lca(args):
-    src = args.path
+    if args.latest and args.path:
+        raise SystemExit(
+            "argument --latest: not allowed with an explicit path. "
+            "Pass one or the other.")
+    if not args.latest and not args.path:
+        raise SystemExit(
+            "Provide a path to a disclosure file, or pass --latest to resolve "
+            "the newest one from the DOL site.")
+
+    src = _resolve_latest_lca() if args.latest else args.path
     if src.startswith(("http://", "https://")):
-        local = os.path.basename(urllib.parse.urlparse(src).path) or "lca_download.xlsx"
+        import onboarding
+        local = onboarding.local_filename_for(src)
         print(f"Downloading {src} -> {local} (this file is typically 100-400 MB)")
         with requests.get(src, stream=True, headers=UA, timeout=120) as r:
             r.raise_for_status()
@@ -841,7 +883,11 @@ def main():
     sub = p.add_subparsers(dest="cmd", required=True)
 
     a = sub.add_parser("load-lca", help="Load DOL LCA disclosure file into SQLite")
-    a.add_argument("path", help="Local .xlsx/.csv path, or an https:// URL")
+    a.add_argument("path", nargs="?", default=None,
+                   help="Local .xlsx/.csv path, or an https:// URL")
+    a.add_argument("--latest", action="store_true",
+                   help="Resolve the newest disclosure file from the DOL site "
+                        "instead of passing a path")
     a.add_argument("--replace", action="store_true", help="Clear existing employer rows first")
     a.set_defaults(func=cmd_load_lca)
 

@@ -23,6 +23,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
+from urllib.parse import urljoin, urlparse
 
 import yaml
 
@@ -73,6 +74,16 @@ WORK_AUTHORIZATION_CHOICES = (
 DEFAULT_TARGET_ROLES = (
     "Software Engineer", "Backend Engineer", "Full Stack Engineer",
     "Data Engineer", "Machine Learning Engineer", "AI Engineer")
+
+DOL_PERFORMANCE_PAGE = (
+    "https://www.dol.gov/agencies/eta/foreign-labor/performance")
+
+# Matches the quarterly LCA disclosure filenames, e.g.
+# LCA_Disclosure_Data_FY2026_Q2.xlsx. PERM and PW files share the page and are
+# deliberately excluded.
+LCA_LINK_RE = re.compile(
+    r"""href=["']([^"']*LCA_Disclosure_Data_FY(\d{4})_Q(\d)[^"']*\.xlsx)["']""",
+    re.I)
 
 EMAIL_ENV = ("GMAIL_ADDRESS", "GMAIL_APP_PASSWORD", "NOTIFICATION_EMAIL")
 SHEETS_ENV = ("GOOGLE_SERVICE_ACCOUNT_JSON", "GOOGLE_SPREADSHEET_ID")
@@ -486,3 +497,42 @@ def format_prompt(prompt, default="") -> str:
 def console_ask(prompt, default=""):
     """Prompt on the terminal, showing the default that a blank answer takes."""
     return input(format_prompt(prompt, default))
+
+
+# --------------------------------------------------- resolving the DOL download
+
+def find_lca_links(html, base_url=DOL_PERFORMANCE_PAGE) -> list[dict]:
+    """Every LCA disclosure link on the page, as absolute URLs."""
+    links = []
+    for href, year, quarter in LCA_LINK_RE.findall(html or ""):
+        links.append({
+            "url": urljoin(base_url, href),
+            "fiscal_year": int(year),
+            "quarter": int(quarter),
+        })
+    return links
+
+
+def latest_lca_link(html, base_url=DOL_PERFORMANCE_PAGE) -> str | None:
+    """The newest disclosure file on the page, or None when none is found.
+
+    None is the expected answer when the DOL restructures the page, and the
+    caller reports the manual path rather than failing with a traceback.
+    """
+    links = find_lca_links(html, base_url)
+    if not links:
+        return None
+    newest = max(links, key=lambda link: (link["fiscal_year"], link["quarter"]))
+    return newest["url"]
+
+
+def local_filename_for(url) -> str:
+    """The filename a download should be saved under.
+
+    os.path.basename is wrong here: on Windows it reads the doubled slash in
+    "https://www.dol.gov//media/FILE.xlsx" as a UNC path and returns "", so the
+    file would land under a generic fallback name. URL paths are always
+    POSIX-shaped, so split on "/" directly.
+    """
+    path = urlparse(str(url)).path
+    return path.rstrip("/").rsplit("/", 1)[-1] or "lca_download.xlsx"

@@ -70,10 +70,17 @@ command is documented in [docs/REFERENCE.md](docs/REFERENCE.md).
 
 ### 1. Load the sponsorship data
 
-Download the most recent **LCA Programs (H-1B, H-1B1, E-3)** disclosure file
-from the [DOL performance page](https://www.dol.gov/agencies/eta/foreign-labor/performance).
-It is an `.xlsx` file, typically 100-400 MB, and the exact filename changes each
-quarter. Replace the example below with the file you downloaded.
+SponsorScan reads the quarterly **LCA Programs (H-1B, H-1B1, E-3)** disclosure
+file published by the DOL. It is an `.xlsx` file, typically 100-400 MB, and the
+filename changes each quarter.
+
+```powershell
+python sponsorscan.py load-lca --latest --replace
+```
+
+That resolves the newest file from the DOL site and downloads it. If the DOL
+changes their page and the lookup fails, it tells you exactly what to download
+by hand, then:
 
 ```powershell
 python sponsorscan.py load-lca "$HOME\Downloads\LCA_Disclosure_Data_FY2026_Q2.xlsx" --replace
