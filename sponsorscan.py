@@ -12,9 +12,16 @@ Two data sources, both of which are structurally durable:
      the employer with no aggregator in between to abandon it.
 
 Usage:
-    python sponsorscan.py load-lca ~/Downloads/LCA_Disclosure_Data_FY2026_Q2.xlsx
+    python sponsorscan.py load-lca --latest
     python sponsorscan.py fetch-jobs
     python sponsorscan.py report --out matches.csv
+
+`companies.yaml` ships with confirmed boards, so a first run can skip
+`discover` and go straight to fetch-jobs. Two commands exist to make setup
+less fiddly:
+
+    python sponsorscan.py setup     # answer a few questions, get a profile
+    python sponsorscan.py doctor    # report which stage needs attention
 
 Run `python sponsorscan.py <command> --help` for per-command options.
 """
