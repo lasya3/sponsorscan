@@ -15,7 +15,10 @@ database with no network and no filesystem.
 
 from __future__ import annotations
 
+import copy
 import importlib.util
+import json
+import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -23,7 +26,13 @@ from pathlib import Path
 
 import yaml
 
-from profile_loader import ProfileError, load_profile
+from profile_loader import (
+    DEFAULT_PROFILE,
+    VALID_WORK_AUTHORIZATION,
+    ProfileError,
+    load_profile,
+    validate_profile,
+)
 
 # Postings older than this suggest the jobs table predates the current run.
 STALE_AFTER_DAYS = 7
@@ -41,6 +50,29 @@ OPTIONAL_MODULES = {
     "openpyxl": "reading .xlsx LCA files; .csv still works",
     "rapidfuzz": "fuzzy employer matching; falls back to exact matches",
 }
+
+# Asked as three labels rather than a 1-10 number. score_skills sums matched
+# weights against a 42-point cap, so the gap between a 6 and a 7 is noise
+# against a default minimum_score of 95. The real risk is self-assessment
+# inflation: rate everything 8+ and the cap is reached after five matches, at
+# which point every posting scores alike and ranking stops discriminating.
+# Three labels force the relative spread the scoring depends on.
+SKILL_WEIGHTS = {"1": 7, "2": 5, "3": 3,
+                 "strong": 7, "comfortable": 5, "familiar": 3}
+
+DEFAULT_SKILL_WEIGHT = 5
+
+# Longer defaults are spelled out in the question body instead.
+MAX_INLINE_DEFAULT = 30
+
+# A fixed order, because VALID_WORK_AUTHORIZATION is a set and a numbered menu
+# needs the same numbering every run. A test asserts the two stay in step.
+WORK_AUTHORIZATION_CHOICES = (
+    "opt", "stem_opt", "us_citizen", "permanent_resident", "other")
+
+DEFAULT_TARGET_ROLES = (
+    "Software Engineer", "Backend Engineer", "Full Stack Engineer",
+    "Data Engineer", "Machine Learning Engineer", "AI Engineer")
 
 EMAIL_ENV = ("GMAIL_ADDRESS", "GMAIL_APP_PASSWORD", "NOTIFICATION_EMAIL")
 SHEETS_ENV = ("GOOGLE_SERVICE_ACCOUNT_JSON", "GOOGLE_SPREADSHEET_ID")
@@ -299,3 +331,158 @@ def run_checks(db_path, companies_path, profile_path, env, today) -> list[CheckR
             results.append(warn_notification_env(profile, env=env))
 
     return results
+
+
+# ------------------------------------------------------------ the setup wizard
+
+def slugify(name: str) -> str:
+    """A short, filename-safe id derived from a display name."""
+    cleaned = re.sub(r"[^a-z0-9]+", "_", (name or "").lower().replace("'", ""))
+    return cleaned.strip("_") or "candidate"
+
+
+def skill_weight(answer: str) -> int:
+    """Map a rating answer to the weight the shipped examples already use."""
+    return SKILL_WEIGHTS.get((answer or "").strip().lower(), DEFAULT_SKILL_WEIGHT)
+
+
+def build_profile(name, profile_id, work_authorization, target_roles, skills,
+                  preferred_locations, max_required_experience,
+                  report_hours) -> dict:
+    """Assemble a complete profile from the wizard's answers.
+
+    Pure: no prompting, no filesystem. Every field the wizard does not ask
+    about keeps its DEFAULT_PROFILE value, so the written file stays a full
+    profile and the format is unchanged.
+    """
+    profile = copy.deepcopy(DEFAULT_PROFILE)
+    hours = f"{report_hours:g}"
+    profile.update({
+        "profile_id": profile_id,
+        "name": name,
+        "work_authorization": work_authorization,
+        "target_roles": list(target_roles),
+        "skills": dict(skills),
+        "preferred_locations": list(preferred_locations),
+        "max_required_experience": max_required_experience,
+        "report_hours": report_hours,
+        "output_files": {
+            "all_matches": f"{profile_id}_matches_{hours}h.csv",
+            "new_matches": f"{profile_id}_new_jobs_{hours}h.csv",
+            "state": f".sponsorscan_{profile_id}_state.json",
+        },
+    })
+    return profile
+
+
+def _split_list(text) -> list[str]:
+    """Comma-separated free text to a clean list."""
+    return [part.strip() for part in (text or "").split(",") if part.strip()]
+
+
+def _as_number(text, default, cast):
+    """Parse a typed answer, falling back rather than raising on nonsense."""
+    try:
+        return cast(str(text).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def collect_answers(ask) -> dict:
+    """Run the question sequence and return arguments for `build_profile`.
+
+    `ask(prompt, default)` supplies each answer, so the sequence can be tested
+    by replaying a script instead of simulating stdin. A blank answer takes the
+    default at every step.
+    """
+    def asked(prompt, default=""):
+        return (ask(prompt, default) or "").strip() or default
+
+    name = asked("Your name", "Candidate")
+    profile_id = slugify(asked("Short id used in filenames", slugify(name)))
+
+    menu = "\n".join(f"  {i}) {choice}"
+                     for i, choice in enumerate(WORK_AUTHORIZATION_CHOICES, 1))
+    auth_answer = asked(f"Work authorization\n{menu}\nChoose", "1")
+    index = _as_number(auth_answer, 1, int)
+    if not 1 <= index <= len(WORK_AUTHORIZATION_CHOICES):
+        index = 1
+    work_authorization = WORK_AUTHORIZATION_CHOICES[index - 1]
+
+    roles = _split_list(asked(
+        "Target roles, comma-separated\n  default: "
+        + ", ".join(DEFAULT_TARGET_ROLES) + "\nRoles",
+        ", ".join(DEFAULT_TARGET_ROLES)))
+
+    skills = {}
+    for skill in _split_list(asked("Which skills are on your resume? (comma-separated)")):
+        rating = asked(
+            f"How would you rate {skill}?\n"
+            "  1) Strong - a core skill\n  2) Comfortable\n  3) Familiar\nChoose",
+            "2")
+        skills[skill] = skill_weight(rating)
+
+    locations = _split_list(asked(
+        "Preferred locations, comma-separated; blank means anywhere in the US"))
+
+    max_experience = _as_number(
+        asked("Maximum years of experience a posting may require", "1"), 1, int)
+    report_hours = _as_number(asked("Report window in hours", "48"), 48, int)
+
+    return {
+        "name": name,
+        "profile_id": profile_id,
+        "work_authorization": work_authorization,
+        "target_roles": roles,
+        "skills": skills,
+        "preferred_locations": locations,
+        "max_required_experience": max_experience,
+        "report_hours": report_hours,
+    }
+
+
+def save_profile(profile, path) -> Path:
+    """Validate, then write. An invalid profile never reaches disk."""
+    validate_profile(profile)
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def run_setup(ask, profiles_dir="profiles") -> Path:
+    """Ask the questions, then write the profile, and return where it landed.
+
+    An existing file is never replaced silently: the user is asked, and a
+    refusal takes a different id rather than losing the answers just given.
+    """
+    answers = collect_answers(ask)
+    profiles_dir = Path(profiles_dir)
+    path = profiles_dir / f"{answers['profile_id']}.json"
+
+    if path.exists():
+        reply = (ask(f"{path} already exists. Overwrite? (y/N)", "n") or "n").strip().lower()
+        if not reply.startswith("y"):
+            replacement = slugify(
+                (ask("Use a different id", f"{answers['profile_id']}_2") or "").strip()
+                or f"{answers['profile_id']}_2")
+            answers["profile_id"] = replacement
+            path = profiles_dir / f"{replacement}.json"
+
+    return save_profile(build_profile(**answers), path)
+
+
+def format_prompt(prompt, default="") -> str:
+    """Render one prompt, showing the default only when it stays readable.
+
+    Long defaults are already spelled out in the question body; repeating a
+    six-item list in brackets makes the line unreadable.
+    """
+    if default and len(str(default)) <= MAX_INLINE_DEFAULT:
+        return f"{prompt} [{default}]: "
+    return f"{prompt}: "
+
+
+def console_ask(prompt, default=""):
+    """Prompt on the terminal, showing the default that a blank answer takes."""
+    return input(format_prompt(prompt, default))

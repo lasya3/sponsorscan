@@ -5,12 +5,21 @@ from datetime import date
 
 import pytest
 
+from profile_loader import VALID_WORK_AUTHORIZATION as WORK_AUTH_SET
+
 from onboarding import (
     check_companies_file,
     check_database,
     check_dependencies,
     format_results,
+    build_profile,
+    collect_answers,
+    format_prompt,
+    run_setup,
+    save_profile,
     run_checks,
+    skill_weight,
+    slugify,
     check_jobs_fetched,
     check_lca_loaded,
     check_profile,
@@ -380,3 +389,235 @@ def test_freshness_message_uses_singular_for_one_day(con):
     result = warn_stale_jobs(con, today=date(2026, 9, 23))
     assert "1 day old" in result.message
     assert "1 days" not in result.message
+
+
+# ============================================================ the setup wizard
+
+def test_slugify_lowercases_and_underscores_a_name():
+    assert slugify("Pranav Balachander") == "pranav_balachander"
+
+
+def test_slugify_strips_punctuation_and_collapses_gaps():
+    assert slugify("  Mary-Jane  O'Brien! ") == "mary_jane_obrien"
+
+
+def test_slugify_falls_back_when_nothing_usable_remains():
+    assert slugify("!!!") == "candidate"
+
+
+def test_skill_labels_map_to_the_weights_the_examples_already_use():
+    assert skill_weight("1") == 7   # Strong
+    assert skill_weight("2") == 5   # Comfortable
+    assert skill_weight("3") == 3   # Familiar
+
+
+def test_unrecognised_skill_rating_defaults_to_the_middle():
+    assert skill_weight("") == 5
+    assert skill_weight("banana") == 5
+
+
+def test_built_profile_passes_the_real_validator():
+    from profile_loader import validate_profile
+    profile = build_profile(
+        name="Casey Jones",
+        profile_id="casey",
+        work_authorization="opt",
+        target_roles=["Software Engineer"],
+        skills={"Python": 7},
+        preferred_locations=["Remote"],
+        max_required_experience=1,
+        report_hours=48)
+    validate_profile(profile)          # raises if invalid
+    assert profile["name"] == "Casey Jones"
+    assert profile["skills"] == {"Python": 7}
+
+
+def test_output_filenames_derive_from_the_profile_id():
+    profile = build_profile(
+        name="Casey", profile_id="casey", work_authorization="opt",
+        target_roles=[], skills={}, preferred_locations=[],
+        max_required_experience=1, report_hours=48)
+    files = profile["output_files"]
+    assert files["all_matches"] == "casey_matches_48h.csv"
+    assert files["new_matches"] == "casey_new_jobs_48h.csv"
+    assert files["state"] == ".sponsorscan_casey_state.json"
+
+
+def test_built_profile_keeps_notifications_off_by_default():
+    profile = build_profile(
+        name="Casey", profile_id="casey", work_authorization="opt",
+        target_roles=[], skills={}, preferred_locations=[],
+        max_required_experience=1, report_hours=48)
+    assert profile["notifications"] == {"email_enabled": False,
+                                        "google_sheets_enabled": False}
+
+
+def scripted(answers):
+    """An `ask` callable that replays answers, then falls back to defaults."""
+    remaining = iter(answers)
+
+    def ask(prompt, default=""):
+        try:
+            return next(remaining)
+        except StopIteration:
+            return default
+
+    return ask
+
+
+def test_work_authorization_menu_covers_every_valid_value():
+    from onboarding import WORK_AUTHORIZATION_CHOICES
+    from profile_loader import VALID_WORK_AUTHORIZATION
+    assert set(WORK_AUTHORIZATION_CHOICES) == VALID_WORK_AUTHORIZATION
+
+
+def test_collect_answers_reads_a_full_session():
+    answers = collect_answers(scripted([
+        "Casey Jones",                      # name
+        "casey",                            # profile_id
+        "1",                                # work authorization -> first choice
+        "Software Engineer, Data Engineer",  # target roles
+        "Python, SQL",                      # skills
+        "1",                                # Python -> Strong
+        "3",                                # SQL    -> Familiar
+        "Remote, Texas",                    # locations
+        "2",                                # max experience
+        "72",                               # report hours
+    ]))
+    from onboarding import WORK_AUTHORIZATION_CHOICES
+    assert answers["name"] == "Casey Jones"
+    assert answers["profile_id"] == "casey"
+    assert answers["work_authorization"] == WORK_AUTHORIZATION_CHOICES[0]
+    assert answers["target_roles"] == ["Software Engineer", "Data Engineer"]
+    assert answers["skills"] == {"Python": 7, "SQL": 3}
+    assert answers["preferred_locations"] == ["Remote", "Texas"]
+    assert answers["max_required_experience"] == 2
+    assert answers["report_hours"] == 72
+
+
+def test_blank_answers_fall_back_to_defaults():
+    answers = collect_answers(scripted([""] * 12))
+    assert answers["profile_id"]                      # never empty
+    assert answers["work_authorization"] in WORK_AUTH_SET
+    assert answers["max_required_experience"] == 1
+    assert answers["report_hours"] == 48
+
+
+def test_profile_id_defaults_to_a_slug_of_the_name():
+    answers = collect_answers(scripted(["Mary-Jane O'Brien", ""]))
+    assert answers["profile_id"] == "mary_jane_obrien"
+
+
+def test_non_numeric_experience_falls_back_rather_than_crashing():
+    answers = collect_answers(scripted([
+        "Casey", "casey", "1", "", "", "", "banana", "not a number"]))
+    assert answers["max_required_experience"] == 1
+    assert answers["report_hours"] == 48
+
+
+def test_collected_answers_build_a_valid_profile():
+    from profile_loader import validate_profile
+    answers = collect_answers(scripted([
+        "Casey", "casey", "1", "Software Engineer", "Python", "1",
+        "Remote", "1", "48"]))
+    validate_profile(build_profile(**answers))
+
+
+def test_saved_profile_can_be_loaded_back(tmp_path):
+    from profile_loader import load_profile
+    profile = build_profile(
+        name="Casey", profile_id="casey", work_authorization="opt",
+        target_roles=["Software Engineer"], skills={"Python": 7},
+        preferred_locations=[], max_required_experience=1, report_hours=48)
+    path = save_profile(profile, tmp_path / "casey.json")
+    reloaded = load_profile(path)
+    assert reloaded["profile_id"] == "casey"
+    assert reloaded["skills"] == {"Python": 7}
+
+
+def test_saving_an_invalid_profile_raises_rather_than_writing(tmp_path):
+    from profile_loader import ProfileError
+    path = tmp_path / "bad.json"
+    with pytest.raises(ProfileError):
+        save_profile({"profile_id": ""}, path)
+    assert not path.exists()
+
+
+def test_run_setup_writes_a_loadable_profile(tmp_path):
+    from profile_loader import load_profile
+    ask = scripted(["Casey Jones", "casey", "1", "Software Engineer",
+                    "Python", "1", "Remote", "1", "48"])
+    path = run_setup(ask, profiles_dir=tmp_path)
+    assert path == tmp_path / "casey.json"
+    assert load_profile(path)["name"] == "Casey Jones"
+
+
+def test_run_setup_asks_before_overwriting_and_honours_a_new_name(tmp_path):
+    from profile_loader import load_profile
+    (tmp_path / "casey.json").write_text("{}", encoding="utf-8")
+    ask = scripted([
+        "Casey Jones", "casey", "1", "Software Engineer", "Python", "1",
+        "Remote", "1", "48",
+        "n",          # do not overwrite
+        "casey_two",  # use this id instead
+    ])
+    path = run_setup(ask, profiles_dir=tmp_path)
+    assert path == tmp_path / "casey_two.json"
+    assert load_profile(path)["profile_id"] == "casey_two"
+    # the original file is untouched
+    assert (tmp_path / "casey.json").read_text(encoding="utf-8") == "{}"
+
+
+def test_run_setup_overwrites_when_told_to(tmp_path):
+    from profile_loader import load_profile
+    (tmp_path / "casey.json").write_text("{}", encoding="utf-8")
+    ask = scripted([
+        "Casey Jones", "casey", "1", "Software Engineer", "Python", "1",
+        "Remote", "1", "48",
+        "y",
+    ])
+    path = run_setup(ask, profiles_dir=tmp_path)
+    assert path == tmp_path / "casey.json"
+    assert load_profile(path)["name"] == "Casey Jones"
+
+
+def test_setup_subcommand_writes_a_profile_from_stdin(tmp_path):
+    import subprocess
+    import sys
+    from pathlib import Path
+    from profile_loader import load_profile
+    repo = Path(__file__).resolve().parent.parent
+    answers = "\n".join([
+        "Casey Jones", "casey", "1", "Software Engineer", "Python", "1",
+        "Remote", "1", "48",
+    ]) + "\n"
+    result = subprocess.run(
+        [sys.executable, str(repo / "sponsorscan.py"), "setup",
+         "--profiles-dir", str(tmp_path)],
+        input=answers, capture_output=True, text=True, cwd=str(repo))
+    assert result.returncode == 0, result.stdout + result.stderr
+    written = tmp_path / "casey.json"
+    assert written.exists()
+    profile = load_profile(written)
+    assert profile["name"] == "Casey Jones"
+    assert profile["skills"] == {"Python": 7}
+    # the wizard tells the user what to run next
+    assert "doctor" in result.stdout or "sponsor_daily_report" in result.stdout
+
+
+def test_short_defaults_are_shown_inline():
+    assert format_prompt("Your name", "Candidate") == "Your name [Candidate]: "
+
+
+def test_a_prompt_without_a_default_shows_no_brackets():
+    assert format_prompt("Which skills?", "") == "Which skills?: "
+
+
+def test_long_defaults_are_not_repeated_in_brackets():
+    # The roles question already lists the default in its body; repeating a
+    # six-item list in brackets makes the prompt unreadable.
+    long_default = ", ".join(["Software Engineer", "Backend Engineer",
+                              "Full Stack Engineer", "Data Engineer"])
+    rendered = format_prompt("Roles", long_default)
+    assert long_default not in rendered
+    assert rendered.endswith(": ")

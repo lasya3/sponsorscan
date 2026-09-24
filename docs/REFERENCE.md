@@ -100,6 +100,40 @@ The report defaults to locations anywhere in the United States. Pass
 The generated CSV is written in the current folder. It can be opened directly in
 Excel or imported into Google Sheets.
 
+## Building a profile
+
+```powershell
+python sponsorscan.py setup
+```
+
+Asks for a name, an id, work authorization, target roles, skills, preferred
+locations, an experience ceiling and a report window, then writes a complete
+profile to `profiles/<id>.json`. Blank answers take the shown default, `Ctrl+C`
+exits without writing, and an existing file is never replaced without asking.
+
+| Flag | Effect |
+|---|---|
+| `--profiles-dir DIR` | Write somewhere other than `./profiles` |
+
+Everything the wizard does not ask about keeps its default, so the written file
+is a full profile in the existing format and stays editable by hand.
+
+Skills are rated with three labels rather than a number:
+
+| Label | Stored weight |
+|---|---|
+| Strong - a core skill | 7 |
+| Comfortable | 5 |
+| Familiar | 3 |
+
+Those are the weights the shipped examples already use. `score_skills` sums the
+weights of every matched skill against a 42-point cap, so against a default
+`minimum_score` of 95 the difference between a 6 and a 7 is noise. The reason
+for labels is the opposite problem: rating every listed skill 8 or higher
+reaches the cap after five matches, and every posting then scores alike. Three
+labels force the relative spread that ranking depends on. The file still stores
+plain integers, so any value can be tuned afterwards.
+
 ## Checking a setup
 
 ```powershell

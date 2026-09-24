@@ -1,7 +1,7 @@
 # SponsorScan onboarding redesign
 
 Date: 2026-09-23
-Status: sections 1 and 2 implemented; sections 3 and 4 outstanding
+Status: sections 1-3 implemented; section 4 outstanding
 
 ## Problem
 

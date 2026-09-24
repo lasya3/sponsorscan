@@ -119,6 +119,21 @@ The first run can take a long time, because it may perform thousands of HTTP
 probes. Results are cached in the database as they land, so `Ctrl+C` is safe and
 a later run resumes from the cache. Skip this until you want broader coverage.
 
+### Optional: personalize the report
+
+```powershell
+python sponsorscan.py setup
+```
+
+Asks a handful of questions - work authorization, target roles, skills,
+locations - and writes a profile for you, instead of leaving you to hand-edit
+25 JSON fields. Then run the personalized report, which adds eligibility
+filtering and resume-weighted ranking:
+
+```powershell
+python sponsor_daily_report.py --profile profiles/yours.json
+```
+
 ### Something not working?
 
 ```powershell

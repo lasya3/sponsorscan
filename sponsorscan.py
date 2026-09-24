@@ -791,6 +791,25 @@ def cmd_report(args):
         print(f"      {r['url']}\n")
 
 
+# ----------------------------------------------------------------------- setup
+
+def cmd_setup(args):
+    """Ask a few questions and write a valid profile."""
+    import onboarding
+
+    print("This writes a candidate profile. Blank answers take the default.\n")
+    try:
+        path = onboarding.run_setup(onboarding.console_ask,
+                                    profiles_dir=args.profiles_dir)
+    except (KeyboardInterrupt, EOFError):
+        raise SystemExit("\nCancelled. Nothing was written.")
+
+    print(f"\nWrote {path}")
+    print("\nNext:")
+    print(f"  python sponsorscan.py doctor --profile {path}")
+    print(f"  python sponsor_daily_report.py --profile {path}")
+
+
 # ---------------------------------------------------------------------- doctor
 
 def cmd_doctor(args):
@@ -861,6 +880,11 @@ def main():
                    help="Drop employers with no certified LCAs on record")
     c.add_argument("--fuzzy-cutoff", type=int, default=90)
     c.set_defaults(func=cmd_report)
+
+    st = sub.add_parser("setup", help="Answer a few questions to write a profile")
+    st.add_argument("--profiles-dir", default="profiles",
+                    help="Directory the profile is written to")
+    st.set_defaults(func=cmd_setup)
 
     doc = sub.add_parser("doctor",
                          help="Check each pipeline stage and report what to fix")
