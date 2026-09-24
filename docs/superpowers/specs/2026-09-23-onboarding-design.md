@@ -92,7 +92,10 @@ later.
 - the four pipeline steps as a minimal path, with the note from 1.2;
 - a pointer to `docs/REFERENCE.md` and the setup guides.
 
-Target length is roughly 60-80 lines.
+Target length is roughly 120-140 lines, down from 456. An earlier estimate of
+60-80 did not account for the install section, which needs both platforms and
+the PowerShell execution-policy steps and does not compress below about 40
+lines without hiding something a first-time user needs.
 
 A new `docs/REFERENCE.md` receives the full flag tables, the scoring table, the
 personalized reporting section, the work-authorization discussion, the optional
