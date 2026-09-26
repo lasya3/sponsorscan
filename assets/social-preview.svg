@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640" role="img" aria-label="sponsorscan">
+  <title>sponsorscan</title>
+
+  <rect width="1280" height="640" fill="#000000"/>
+
+  <g fill="none" stroke="#ffffff" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" transform="translate(120 150)">
+    <rect x="0" y="28" width="144" height="104" rx="14"/>
+    <path d="M44 28 V12 a12 12 0 0 1 12-12 h32 a12 12 0 0 1 12 12 v16"/>
+    <path d="M0 64 H144"/>
+    <rect x="56" y="52" width="32" height="24" rx="6"/>
+  </g>
+
+  <text x="116" y="420"
+        font-family="'Helvetica Neue', Helvetica, Arial, 'Segoe UI', sans-serif"
+        font-size="120" font-weight="600" letter-spacing="-3" fill="#ffffff">sponsorscan</text>
+
+  <text x="120" y="492"
+        font-family="'Helvetica Neue', Helvetica, Arial, 'Segoe UI', sans-serif"
+        font-size="36" font-weight="400" fill="#cccccc">Entry-level jobs at employers with real H-1B filing history.</text>
+</svg>
