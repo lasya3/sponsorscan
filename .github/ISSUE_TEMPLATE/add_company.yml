@@ -1,0 +1,42 @@
+name: Add a company
+description: Request that a company job board be added to companies.yaml
+labels: [companies]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Verify the slug first by opening the matching URL in a browser. If it
+        returns JSON, the slug is right.
+
+        - Greenhouse: `https://boards-api.greenhouse.io/v1/boards/<slug>/jobs`
+        - Lever: `https://api.lever.co/v0/postings/<slug>?mode=json`
+        - Ashby: `https://api.ashbyhq.com/posting-api/job-board/<slug>`
+  - type: input
+    id: name
+    attributes:
+      label: Company name
+      description: The legal-ish name, as it appears in DOL filings.
+      placeholder: Acme Corp
+    validations:
+      required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: ATS provider
+      options: [greenhouse, lever, ashby, other]
+    validations:
+      required: true
+  - type: input
+    id: slug
+    attributes:
+      label: Board slug
+      placeholder: acmecorp
+    validations:
+      required: true
+  - type: checkboxes
+    id: verified
+    attributes:
+      label: Verification
+      options:
+        - label: I opened the API URL above and it returned JSON
+          required: true
