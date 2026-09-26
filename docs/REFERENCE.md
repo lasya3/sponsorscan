@@ -200,7 +200,8 @@ eligibility checks and resume-weighted ranking.
 A personalized setup may account for:
 
 - target role families;
-- skills demonstrated on the candidate's resume;
+- skills demonstrated on the candidate's resume, entered by hand rather than
+  parsed from a file;
 - maximum acceptable experience requirements;
 - degree requirements;
 - seniority indicators;

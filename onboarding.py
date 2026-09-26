@@ -66,6 +66,10 @@ DEFAULT_SKILL_WEIGHT = 5
 # Longer defaults are spelled out in the question body instead.
 MAX_INLINE_DEFAULT = 30
 
+# How many recognised skill names to show at the prompt. The full list is 38,
+# too long to read inside a terminal question.
+SKILL_HINT_COUNT = 14
+
 # A fixed order, because VALID_WORK_AUTHORIZATION is a set and a numbered menu
 # needs the same numbering every run. A test asserts the two stay in step.
 WORK_AUTHORIZATION_CHOICES = (
@@ -343,6 +347,7 @@ def run_checks(db_path, companies_path, profile_path, env, today) -> list[CheckR
             profile = load_profile(profile_path)
             results.append(warn_score_threshold(profile))
             results.append(warn_empty_targeting(profile))
+            results.append(warn_unknown_skills(profile))
             results.append(warn_authorization(profile))
             results.append(warn_notification_env(profile, env=env))
 
@@ -404,7 +409,7 @@ def _as_number(text, default, cast):
         return default
 
 
-def collect_answers(ask) -> dict:
+def collect_answers(ask, notify=None) -> dict:
     """Run the question sequence and return arguments for `build_profile`.
 
     `ask(prompt, default)` supplies each answer, so the sequence can be tested
@@ -430,13 +435,26 @@ def collect_answers(ask) -> dict:
         + ", ".join(DEFAULT_TARGET_ROLES) + "\nRoles",
         ", ".join(DEFAULT_TARGET_ROLES)))
 
+    notify = notify or (lambda _message: None)
+
+    recognised = ", ".join(known_skill_names()[:SKILL_HINT_COUNT])
     skills = {}
-    for skill in _split_list(asked("Which skills are on your resume? (comma-separated)")):
+    for skill in _split_list(asked(
+            "Which skills are on your resume? (comma-separated)\n"
+            f"  recognised names include: {recognised}\n"
+            "  anything else is matched literally, so spell it the way postings do"
+            "\nSkills")):
         rating = asked(
             f"How would you rate {skill}?\n"
             "  1) Strong - a core skill\n  2) Comfortable\n  3) Familiar\nChoose",
             "2")
         skills[skill] = skill_weight(rating)
+
+    for name in unknown_skills(skills):
+        suggestion = suggest_skill(name)
+        hint = f" Did you mean {suggestion}?" if suggestion else ""
+        notify(f"  note: '{name}' has no built-in pattern, so it is matched "
+               f"literally against posting text.{hint}")
 
     locations = _split_list(asked(
         "Preferred locations, comma-separated; blank means anywhere in the US"))
@@ -466,13 +484,13 @@ def save_profile(profile, path) -> Path:
     return path
 
 
-def run_setup(ask, profiles_dir="profiles") -> Path:
+def run_setup(ask, profiles_dir="profiles", notify=None) -> Path:
     """Ask the questions, then write the profile, and return where it landed.
 
     An existing file is never replaced silently: the user is asked, and a
     refusal takes a different id rather than losing the answers just given.
     """
-    answers = collect_answers(ask)
+    answers = collect_answers(ask, notify=notify)
     profiles_dir = Path(profiles_dir)
     path = profiles_dir / f"{answers['profile_id']}.json"
 
@@ -541,3 +559,63 @@ def local_filename_for(url) -> str:
     """
     path = urlparse(str(url)).path
     return path.rstrip("/").rsplit("/", 1)[-1] or "lca_download.xlsx"
+
+
+# --------------------------------------------------- skill vocabulary guidance
+
+def known_skill_names() -> tuple[str, ...]:
+    """The skill names the scorer has hand-written patterns for.
+
+    Imported lazily for the same reason as warn_authorization: sponsor_daily_report
+    imports sponsorscan, which imports this module.
+    """
+    from sponsor_daily_report import SKILL_PATTERNS
+
+    return tuple(SKILL_PATTERNS)
+
+
+def unknown_skills(skills) -> list[str]:
+    """Skill names the scorer has no pattern for.
+
+    These are not worthless: `_compile_skills` falls back to a literal
+    word-boundary match on the name, which works when a posting spells the
+    skill exactly the way the profile does. It fails silently when it does
+    not - "Postgres" never matches a posting that says "PostgreSQL".
+    """
+    known = set(known_skill_names())
+    return [name for name in (skills or {}) if name not in known]
+
+
+def suggest_skill(name) -> str | None:
+    """The closest known skill name, or None when nothing is close.
+
+    difflib rather than rapidfuzz, because rapidfuzz is optional and this
+    needs to work without it.
+    """
+    import difflib
+
+    known = known_skill_names()
+    lowered = {n.lower(): n for n in known}
+    matches = difflib.get_close_matches(
+        str(name).lower(), list(lowered), n=1, cutoff=0.8)
+    if not matches:
+        return None
+    suggestion = lowered[matches[0]]
+    return None if suggestion == name else suggestion
+
+
+def warn_unknown_skills(profile) -> CheckResult:
+    """Flag skills that will only ever be matched literally."""
+    unknown = unknown_skills((profile or {}).get("skills"))
+    if not unknown:
+        return CheckResult("Skill names", "OK", "All recognised by the scorer")
+
+    described = []
+    for name in unknown:
+        suggestion = suggest_skill(name)
+        described.append(f"{name} (did you mean {suggestion}?)" if suggestion else name)
+
+    return CheckResult(
+        "Skill names", "WARN",
+        "Matched literally, so a posting spelling them differently will not "
+        "count: " + ", ".join(described))

@@ -19,7 +19,7 @@ The core workflow is:
 3. Filter and rank the results.
 
 Optionally, `discover` widens the company list automatically, and a personalized
-report adds resume-weighted ranking, Google Sheets sync, and email notifications
+report adds skill-weighted ranking, Google Sheets sync, and email notifications
 through GitHub Actions.
 
 ## Install
@@ -134,8 +134,10 @@ python sponsorscan.py setup
 
 Asks a handful of questions - work authorization, target roles, skills,
 locations - and writes a profile for you, instead of leaving you to hand-edit
-25 JSON fields. Then run the personalized report, which adds eligibility
-filtering and resume-weighted ranking:
+25 JSON fields. You type your skills in; there is no resume file to upload. The
+wizard shows which skill names the scorer recognises and flags any it will only
+match literally. Then run the personalized report, which adds eligibility
+filtering and ranking weighted by the skills you listed:
 
 ```powershell
 python sponsor_daily_report.py --profile profiles/yours.json
@@ -156,7 +158,7 @@ to validate a profile at the same time.
 | You want | Read |
 |---|---|
 | Every command flag, the scoring table, and the caveats | [docs/REFERENCE.md](docs/REFERENCE.md) |
-| A report ranked against your own resume and eligibility | [docs/REFERENCE.md](docs/REFERENCE.md#personalized-reporting) |
+| A report ranked against the skills you list and your eligibility | [docs/REFERENCE.md](docs/REFERENCE.md#personalized-reporting) |
 | Setup for OPT or STEM OPT | [docs/OPT_SETUP.md](docs/OPT_SETUP.md) |
 | Setup for U.S. citizens | [docs/CITIZEN_SETUP.md](docs/CITIZEN_SETUP.md) |
 | Google Sheets sync | [docs/GOOGLE_SHEETS_SETUP.md](docs/GOOGLE_SHEETS_SETUP.md) |

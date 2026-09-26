@@ -9,6 +9,10 @@ from profile_loader import VALID_WORK_AUTHORIZATION as WORK_AUTH_SET
 
 from onboarding import (
     check_companies_file,
+    known_skill_names,
+    suggest_skill,
+    unknown_skills,
+    warn_unknown_skills,
     check_database,
     check_dependencies,
     format_results,
@@ -768,3 +772,136 @@ def test_plural_forms_are_unchanged(con, tmp_path):
     con.executemany("INSERT INTO employers (employer_norm, certified) VALUES (?, 1)",
                     [("a",), ("b",)])
     assert "2 employers loaded" in check_lca_loaded(con).message
+
+
+# ================================================== skill vocabulary guidance
+
+def test_known_skill_names_come_from_the_scorer():
+    import sponsor_daily_report
+    names = known_skill_names()
+    assert set(names) == set(sponsor_daily_report.SKILL_PATTERNS)
+    assert "Python" in names
+
+
+def test_unknown_skills_are_identified():
+    assert unknown_skills({"Python": 7, "Postgres": 5, "SQL": 6}) == ["Postgres"]
+
+
+def test_known_skills_report_nothing_unknown():
+    assert unknown_skills({"Python": 7, "Machine Learning": 6}) == []
+
+
+def test_case_differences_are_not_treated_as_unknown():
+    # The scorer's lookup is exact, so a case slip really does fall back to a
+    # literal match; it should still be flagged, with the correct spelling.
+    assert unknown_skills({"tensorflow": 5}) == ["tensorflow"]
+    assert suggest_skill("tensorflow") == "TensorFlow"
+
+
+def test_a_near_miss_suggests_the_real_name():
+    assert suggest_skill("Pythn") == "Python"
+    assert suggest_skill("Scikit Learn") == "Scikit-learn"
+
+
+def test_a_skill_with_no_close_match_suggests_nothing():
+    # Nothing resembling Postgres is in the vocabulary at all.
+    assert suggest_skill("Postgres") is None
+
+
+def test_doctor_warns_about_unknown_skills_in_a_profile():
+    result = warn_unknown_skills({"skills": {"Python": 7, "Postgres": 5}})
+    assert result.status == "WARN"
+    assert "Postgres" in result.message
+    assert "literal" in result.message.lower()
+
+
+def test_doctor_is_quiet_when_every_skill_is_known():
+    assert warn_unknown_skills({"skills": {"Python": 7}}).status == "OK"
+
+
+def test_doctor_is_quiet_when_there_are_no_skills():
+    assert warn_unknown_skills({"skills": {}}).status == "OK"
+
+
+def test_the_warning_includes_a_suggestion_when_one_exists():
+    result = warn_unknown_skills({"skills": {"tensorflow": 5}})
+    assert "TensorFlow" in result.message
+
+
+def recording(answers):
+    """An `ask` that replays answers and records the prompts it was given."""
+    remaining = iter(answers)
+    prompts = []
+
+    def ask(prompt, default=""):
+        prompts.append(prompt)
+        try:
+            return next(remaining)
+        except StopIteration:
+            return default
+
+    return ask, prompts
+
+
+def test_the_skills_question_shows_the_known_vocabulary():
+    ask, prompts = recording(["Casey", "casey", "1", "", "Python", "1", "", "1", "48"])
+    collect_answers(ask)
+    skills_prompt = next(p for p in prompts if "resume" in p.lower())
+    assert "Python" in skills_prompt
+
+
+def test_the_wizard_flags_a_skill_the_scorer_will_only_match_literally():
+    notices = []
+    ask = scripted(["Casey", "casey", "1", "", "Postgres", "2", "", "1", "48"])
+    collect_answers(ask, notify=notices.append)
+    assert any("Postgres" in n for n in notices)
+    assert any("literal" in n.lower() for n in notices)
+
+
+def test_the_wizard_stays_quiet_for_recognised_skills():
+    notices = []
+    ask = scripted(["Casey", "casey", "1", "", "Python, SQL", "1", "1", "", "1", "48"])
+    collect_answers(ask, notify=notices.append)
+    assert notices == []
+
+
+def test_run_checks_reports_unknown_skills(tmp_path):
+    db = build_db(tmp_path, employers=10, jobs=5)
+    companies = tmp_path / "companies.yaml"
+    companies.write_text(
+        "companies:\n  greenhouse:\n    - {slug: stripe, name: Stripe}\n",
+        encoding="utf-8")
+    profile = write_profile(tmp_path, {
+        "profile_id": "casey", "work_authorization": "opt",
+        "skills": {"Postgres": 5}})
+    results = run_checks(db_path=db, companies_path=companies,
+                         profile_path=profile, env={}, today=date(2026, 9, 23))
+    skill_results = [r for r in results if r.name == "Skill names"]
+    assert len(skill_results) == 1
+    assert skill_results[0].status == "WARN"
+
+
+def test_run_setup_surfaces_skill_notices(tmp_path):
+    notices = []
+    ask = scripted(["Casey", "casey", "1", "Software Engineer", "Postgres", "1",
+                    "Remote", "1", "48"])
+    run_setup(ask, profiles_dir=tmp_path, notify=notices.append)
+    assert any("Postgres" in n for n in notices)
+
+
+def test_setup_subcommand_prints_the_skill_notice(tmp_path):
+    import subprocess
+    import sys
+    from pathlib import Path
+    repo = Path(__file__).resolve().parent.parent
+    answers = "\n".join([
+        "Casey", "casey", "1", "Software Engineer", "Postgres", "1",
+        "Remote", "1", "48",
+    ]) + "\n"
+    result = subprocess.run(
+        [sys.executable, str(repo / "sponsorscan.py"), "setup",
+         "--profiles-dir", str(tmp_path)],
+        input=answers, capture_output=True, text=True, cwd=str(repo))
+    assert result.returncode == 0, result.stdout + result.stderr
+    # the notice itself, not the prompt hint that also contains "literally"
+    assert "has no built-in pattern" in result.stdout

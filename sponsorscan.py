@@ -849,7 +849,8 @@ def cmd_setup(args):
     print("This writes a candidate profile. Blank answers take the default.\n")
     try:
         path = onboarding.run_setup(onboarding.console_ask,
-                                    profiles_dir=args.profiles_dir)
+                                    profiles_dir=args.profiles_dir,
+                                    notify=print)
     except (KeyboardInterrupt, EOFError):
         raise SystemExit("\nCancelled. Nothing was written.")
 
