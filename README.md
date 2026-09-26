@@ -18,9 +18,14 @@ The core workflow is:
 2. Pull current postings from the job boards in `companies.yaml`.
 3. Filter and rank the results.
 
-Optionally, `discover` widens the company list automatically, and a personalized
-report adds skill-weighted ranking, Google Sheets sync, and email notifications
-through GitHub Actions.
+Then, optionally:
+
+4. Generate a personalized report ranked against your own skills and eligibility.
+5. Sync it to Google Sheets and send email notifications.
+6. Run the whole thing on a schedule through GitHub Actions.
+
+`discover` also widens the company list automatically when you want broader
+coverage than the boards that ship in `companies.yaml`.
 
 ## Install
 
@@ -163,6 +168,7 @@ to validate a profile at the same time.
 | Setup for U.S. citizens | [docs/CITIZEN_SETUP.md](docs/CITIZEN_SETUP.md) |
 | Google Sheets sync | [docs/GOOGLE_SHEETS_SETUP.md](docs/GOOGLE_SHEETS_SETUP.md) |
 | Email notifications | [docs/EMAIL_SETUP.md](docs/EMAIL_SETUP.md) |
+| Running it on a schedule, unattended | [docs/REFERENCE.md](docs/REFERENCE.md#github-actions-automation) |
 
 Before trusting a run, read the
 [caveats](docs/REFERENCE.md#caveats-read-these). An LCA filing is evidence of
