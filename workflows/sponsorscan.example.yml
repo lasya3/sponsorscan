@@ -51,25 +51,14 @@ jobs:
           restore-keys: |
             sponsorscan-db-${{ runner.os }}-
 
-      - name: Download latest configured LCA file
-        if: steps.db-cache.outputs.cache-hit != 'true'
-        env:
-          LCA_DOWNLOAD_URL: ${{ secrets.LCA_DOWNLOAD_URL }}
-        run: |
-          if [ -z "$LCA_DOWNLOAD_URL" ]; then
-            echo "LCA_DOWNLOAD_URL is required when no cached database exists."
-            exit 1
-          fi
-
-          curl --fail --location \
-            --retry 3 \
-            --output lca-disclosure.xlsx \
-            "$LCA_DOWNLOAD_URL"
-
       - name: Load LCA data
         if: steps.db-cache.outputs.cache-hit != 'true'
+        # --latest resolves the current quarter's disclosure file from the DOL
+        # site, so there is no URL secret to set and nothing to update when a
+        # new quarter is published. stdin is not a terminal here, so it does
+        # not stop to confirm.
         run: |
-          python sponsorscan.py load-lca lca-disclosure.xlsx --replace
+          python sponsorscan.py load-lca --latest --replace
 
       - name: Save SponsorScan database cache
         if: steps.db-cache.outputs.cache-hit != 'true'
