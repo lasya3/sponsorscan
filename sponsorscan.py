@@ -12,9 +12,16 @@ Two data sources, both of which are structurally durable:
      the employer with no aggregator in between to abandon it.
 
 Usage:
-    python sponsorscan.py load-lca ~/Downloads/LCA_Disclosure_Data_FY2026_Q2.xlsx
+    python sponsorscan.py load-lca --latest
     python sponsorscan.py fetch-jobs
     python sponsorscan.py report --out matches.csv
+
+`companies.yaml` ships with confirmed boards, so a first run can skip
+`discover` and go straight to fetch-jobs. Two commands exist to make setup
+less fiddly:
+
+    python sponsorscan.py setup     # answer a few questions, get a profile
+    python sponsorscan.py doctor    # report which stage needs attention
 
 Run `python sponsorscan.py <command> --help` for per-command options.
 """
@@ -168,10 +175,52 @@ def _iter_rows(path):
                 yield row
 
 
+def _resolve_latest_lca():
+    """Find the newest LCA disclosure file linked from the DOL page.
+
+    Returns the URL, or exits with the manual instructions. A DOL redesign is
+    the expected failure here, so it must not surface as a traceback.
+    """
+    import onboarding
+
+    print(f"Looking for the newest disclosure file on {onboarding.DOL_PERFORMANCE_PAGE}")
+    try:
+        r = requests.get(onboarding.DOL_PERFORMANCE_PAGE, headers=UA, timeout=60)
+        r.raise_for_status()
+        url = onboarding.latest_lca_link(r.text, onboarding.DOL_PERFORMANCE_PAGE)
+    except requests.RequestException as exc:
+        url = None
+        print(f"Could not reach the DOL site: {exc}")
+
+    if not url:
+        raise SystemExit(
+            "Could not resolve a disclosure link automatically.\n"
+            f"Open {onboarding.DOL_PERFORMANCE_PAGE}, download the most recent\n"
+            "'LCA Programs (H-1B, H-1B1, E-3)' file, then run:\n"
+            "  python sponsorscan.py load-lca <downloaded file> --replace")
+
+    print(f"Found {url}")
+    if sys.stdin.isatty():
+        reply = input("Download this file? (Y/n): ").strip().lower()
+        if reply.startswith("n"):
+            raise SystemExit("Cancelled.")
+    return url
+
+
 def cmd_load_lca(args):
-    src = args.path
+    if args.latest and args.path:
+        raise SystemExit(
+            "argument --latest: not allowed with an explicit path. "
+            "Pass one or the other.")
+    if not args.latest and not args.path:
+        raise SystemExit(
+            "Provide a path to a disclosure file, or pass --latest to resolve "
+            "the newest one from the DOL site.")
+
+    src = _resolve_latest_lca() if args.latest else args.path
     if src.startswith(("http://", "https://")):
-        local = os.path.basename(urllib.parse.urlparse(src).path) or "lca_download.xlsx"
+        import onboarding
+        local = onboarding.local_filename_for(src)
         print(f"Downloading {src} -> {local} (this file is typically 100-400 MB)")
         with requests.get(src, stream=True, headers=UA, timeout=120) as r:
             r.raise_for_status()
@@ -791,6 +840,49 @@ def cmd_report(args):
         print(f"      {r['url']}\n")
 
 
+# ----------------------------------------------------------------------- setup
+
+def cmd_setup(args):
+    """Ask a few questions and write a valid profile."""
+    import onboarding
+
+    print("This writes a candidate profile. Blank answers take the default.\n")
+    try:
+        path = onboarding.run_setup(onboarding.console_ask,
+                                    profiles_dir=args.profiles_dir,
+                                    notify=print)
+    except (KeyboardInterrupt, EOFError):
+        raise SystemExit("\nCancelled. Nothing was written.")
+
+    print(f"\nWrote {path}")
+    print("\nNext:")
+    print(f"  python sponsorscan.py doctor --profile {path}")
+    print(f"  python sponsor_daily_report.py --profile {path}")
+
+
+# ---------------------------------------------------------------------- doctor
+
+def cmd_doctor(args):
+    """Report which pipeline stage needs attention.
+
+    The checks live in onboarding.py as pure functions; this only supplies the
+    paths, the environment and the date, then prints and sets the exit code.
+    """
+    import datetime
+
+    import onboarding
+
+    results = onboarding.run_checks(
+        db_path=args.db or DB_PATH,
+        companies_path=args.companies,
+        profile_path=args.profile,
+        env=os.environ,
+        today=datetime.date.today())
+
+    print(onboarding.format_results(results))
+    raise SystemExit(onboarding.exit_code(results))
+
+
 # ------------------------------------------------------------------------ main
 
 def main():
@@ -799,7 +891,11 @@ def main():
     sub = p.add_subparsers(dest="cmd", required=True)
 
     a = sub.add_parser("load-lca", help="Load DOL LCA disclosure file into SQLite")
-    a.add_argument("path", help="Local .xlsx/.csv path, or an https:// URL")
+    a.add_argument("path", nargs="?", default=None,
+                   help="Local .xlsx/.csv path, or an https:// URL")
+    a.add_argument("--latest", action="store_true",
+                   help="Resolve the newest disclosure file from the DOL site "
+                        "instead of passing a path")
     a.add_argument("--replace", action="store_true", help="Clear existing employer rows first")
     a.set_defaults(func=cmd_load_lca)
 
@@ -838,6 +934,20 @@ def main():
                    help="Drop employers with no certified LCAs on record")
     c.add_argument("--fuzzy-cutoff", type=int, default=90)
     c.set_defaults(func=cmd_report)
+
+    st = sub.add_parser("setup", help="Answer a few questions to write a profile")
+    st.add_argument("--profiles-dir", default="profiles",
+                    help="Directory the profile is written to")
+    st.set_defaults(func=cmd_setup)
+
+    doc = sub.add_parser("doctor",
+                         help="Check each pipeline stage and report what to fix")
+    doc.add_argument("--profile", default=None,
+                     help="Profile to validate; omitted skips the profile checks")
+    doc.add_argument("--companies", default="companies.yaml")
+    doc.add_argument("--db", default=None,
+                     help="Database to inspect; defaults to SPONSORSCAN_DB or ./sponsorscan.db")
+    doc.set_defaults(func=cmd_doctor)
 
     args = p.parse_args()
     args.func(args)
