@@ -587,21 +587,42 @@ def unknown_skills(skills) -> list[str]:
 
 
 def suggest_skill(name) -> str | None:
-    """The closest known skill name, or None when nothing is close.
+    """The known skill that already covers `name`, or None.
 
-    difflib rather than rapidfuzz, because rapidfuzz is optional and this
-    needs to work without it.
+    Two ways to be covered. The typed name may be an alias the scorer already
+    recognises - "K8s" is a pattern under Kubernetes, "Golang" under Go - in
+    which case listing it separately is redundant and the real key is better.
+    Otherwise it may simply be misspelled, which difflib catches.
+
+    difflib rather than rapidfuzz, because rapidfuzz is optional and this has
+    to work without it.
     """
     import difflib
 
-    known = known_skill_names()
-    lowered = {n.lower(): n for n in known}
-    matches = difflib.get_close_matches(
-        str(name).lower(), list(lowered), n=1, cutoff=0.8)
-    if not matches:
+    from sponsor_daily_report import SKILL_PATTERNS
+
+    text = str(name).strip()
+    if not text:
         return None
-    suggestion = lowered[matches[0]]
-    return None if suggestion == name else suggestion
+
+    if text in SKILL_PATTERNS:
+        return None
+
+    # A near-miss on the name itself comes first, because it is the more
+    # specific answer: "Postgres" should suggest PostgreSQL rather than SQL,
+    # even though SQL's patterns also cover it.
+    lowered = {n.lower(): n for n in known_skill_names()}
+    matches = difflib.get_close_matches(text.lower(), list(lowered), n=1, cutoff=0.8)
+    if matches:
+        suggestion = lowered[matches[0]]
+        return None if suggestion == text else suggestion
+
+    # Otherwise, an alias the scorer already recognises under another name.
+    for skill, patterns in SKILL_PATTERNS.items():
+        if any(re.search(p, text, re.I) for p in patterns):
+            return skill
+
+    return None
 
 
 def warn_unknown_skills(profile) -> CheckResult:

@@ -804,8 +804,17 @@ def test_a_near_miss_suggests_the_real_name():
 
 
 def test_a_skill_with_no_close_match_suggests_nothing():
-    # Nothing resembling Postgres is in the vocabulary at all.
-    assert suggest_skill("Postgres") is None
+    # Nothing resembling Fortran is in the vocabulary.
+    assert suggest_skill("Fortran") is None
+    assert suggest_skill("COBOL") is None
+
+
+def test_an_alias_suggests_the_skill_that_already_covers_it():
+    # These are not close as strings, but each is already a pattern under the
+    # suggested skill, so typing them separately is redundant.
+    assert suggest_skill("K8s") == "Kubernetes"
+    assert suggest_skill("Golang") == "Go"
+    assert suggest_skill("Postgres") == "PostgreSQL"
 
 
 def test_doctor_warns_about_unknown_skills_in_a_profile():

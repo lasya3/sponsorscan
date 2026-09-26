@@ -140,6 +140,16 @@ Skills are rated with three labels rather than a number:
 | Comfortable | 5 |
 | Familiar | 3 |
 
+The wizard also shows which skill names the scorer recognises. It has patterns
+for roughly 80 skills, each with its common spellings, so `Kubernetes` also
+matches `K8s` and `PostgreSQL` also matches `Postgres`.
+
+A name outside that set is not rejected. It falls back to a literal match on
+exactly what you typed, which works when a posting spells it the same way and
+scores nothing when it does not: `Postgres` never matches a posting that says
+`PostgreSQL`. The wizard flags those as you type and suggests the recognised
+name, and `doctor` reports them for profiles edited by hand.
+
 Those are the weights the shipped examples already use. `score_skills` sums the
 weights of every matched skill against a 42-point cap, so against a default
 `minimum_score` of 95 the difference between a 6 and a 7 is noise. The reason

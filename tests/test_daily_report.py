@@ -292,3 +292,86 @@ def test_key_falls_back_to_company_and_title_without_a_url():
 ])
 def test_priority_labels(score, fit, expected):
     assert sdr.priority_label(score, fit) == expected
+
+
+# -------------------------------------------------- extended skill vocabulary
+#
+# The original table was Python/ML oriented, so a backend or data candidate
+# fell back to literal matching for most of their stack. Each case below is a
+# phrase a real posting would use.
+
+NEW_SKILL_CASES = [
+    ("PostgreSQL", "Experience with PostgreSQL and Redis"),
+    ("PostgreSQL", "We run Postgres in production"),
+    ("MongoDB", "Familiarity with MongoDB"),
+    ("MongoDB", "Data stored in Mongo"),
+    ("Redis", "Caching with Redis"),
+    ("Kubernetes", "Deploy to Kubernetes"),
+    ("Kubernetes", "Experience with K8s"),
+    ("Terraform", "Infrastructure as code using Terraform"),
+    ("Linux", "Comfortable on Linux"),
+    ("CI/CD", "Build and maintain CI/CD pipelines"),
+    ("CI/CD", "Experience with continuous integration"),
+    ("Rust", "Systems programming in Rust"),
+    ("C#", "Backend services in C#"),
+    (".NET", "Building on .NET"),
+    ("Ruby", "Our API is written in Ruby"),
+    ("PHP", "Legacy PHP services"),
+    ("Kotlin", "Android development with Kotlin"),
+    ("Swift", "iOS development in Swift"),
+    ("Scala", "Data pipelines in Scala"),
+    ("Spark", "Large scale processing with Apache Spark"),
+    ("Spark", "Experience with PySpark"),
+    ("Kafka", "Event streaming via Kafka"),
+    ("Airflow", "Orchestration with Airflow"),
+    ("Snowflake", "Warehouse on Snowflake"),
+    ("Databricks", "We use Databricks"),
+    ("Tableau", "Dashboards in Tableau"),
+    ("Power BI", "Reporting with Power BI"),
+    ("Angular", "Frontend in Angular"),
+    ("Vue", "Components written in Vue.js"),
+    ("Next.js", "Built with Next.js"),
+    ("Django", "Python web services using Django"),
+    ("Spring", "Java services on Spring Boot"),
+    ("GraphQL", "Our API uses GraphQL"),
+    ("REST APIs", "Design and build REST APIs"),
+    ("HTML/CSS", "Strong HTML and CSS fundamentals"),
+    ("MATLAB", "Simulation in MATLAB"),
+    ("Bash/Shell", "Comfortable writing bash scripts"),
+    ("Agile/Scrum", "We work in two week Scrum sprints"),
+    ("Selenium", "Automated browser tests with Selenium"),
+    ("Go", "Experience with Go, Python, and Rust"),
+    ("Go", "Backend written in Golang"),
+]
+
+
+@pytest.mark.parametrize("skill,posting", NEW_SKILL_CASES)
+def test_extended_vocabulary_matches_real_phrasing(skill, posting):
+    assert skill in sdr.SKILL_PATTERNS, f"{skill} missing from SKILL_PATTERNS"
+    compiled = sdr.build_resume_skills({"skills": {skill: 5}})
+    matched, _ = sdr.score_skills("Engineer", posting, compiled)
+    assert matched == [skill], f"{skill!r} did not match {posting!r}"
+
+
+# Names that are ordinary English words need to stay narrow, or they match
+# prose in every posting and flatten the ranking.
+
+FALSE_POSITIVE_CASES = [
+    ("Go", "We want someone who can go fast and ship features"),
+    ("Spring", "Summer and Spring 2027 internships are open"),
+    ("Excel", "Candidates who excel at communication"),
+    ("Excel", "You will excel in a fast paced team"),
+]
+
+
+@pytest.mark.parametrize("skill,posting", FALSE_POSITIVE_CASES)
+def test_ambiguous_names_do_not_match_ordinary_prose(skill, posting):
+    compiled = sdr.build_resume_skills({"skills": {skill: 5}})
+    matched, _ = sdr.score_skills("Engineer", posting, compiled)
+    assert matched == [], f"{skill!r} wrongly matched {posting!r}"
+
+
+def test_excel_still_matches_the_actual_tool():
+    compiled = sdr.build_resume_skills({"skills": {"Excel": 5}})
+    matched, _ = sdr.score_skills("Analyst", "Advanced Microsoft Excel required", compiled)
+    assert matched == ["Excel"]
