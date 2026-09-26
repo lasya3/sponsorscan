@@ -104,6 +104,11 @@ class CheckResult:
     remedy: str | None = None
 
 
+def _count(n, singular, plural=None) -> str:
+    """"1 employer" / "2 employers", so single-row setups read naturally."""
+    return f"{n:,} {singular if n == 1 else (plural or singular + 's')}"
+
+
 def _table_count(con, table: str) -> int | None:
     """Row count for `table`, or None when the table does not exist."""
     try:
@@ -119,7 +124,7 @@ def check_lca_loaded(con) -> CheckResult:
         return CheckResult(
             "LCA data", "FAIL", "No employer records loaded",
             "python sponsorscan.py load-lca <file.xlsx> --replace")
-    return CheckResult("LCA data", "OK", f"{count:,} employers loaded")
+    return CheckResult("LCA data", "OK", f"{_count(count, 'employer')} loaded")
 
 
 def check_jobs_fetched(con) -> CheckResult:
@@ -129,7 +134,7 @@ def check_jobs_fetched(con) -> CheckResult:
         return CheckResult(
             "Live postings", "FAIL", "No postings fetched",
             "python sponsorscan.py fetch-jobs --replace")
-    return CheckResult("Live postings", "OK", f"{count:,} postings stored")
+    return CheckResult("Live postings", "OK", f"{_count(count, 'posting')} stored")
 
 
 def warn_stale_jobs(con, today: date) -> CheckResult:
@@ -229,7 +234,7 @@ def check_companies_file(path) -> CheckResult:
             "python sponsorscan.py discover")
     return CheckResult(
         "Company list", "OK",
-        f"{total} boards across {len(providers)} providers")
+        f"{_count(total, 'board')} across {_count(len(providers), 'provider')}")
 
 
 def exit_code(results) -> int:
@@ -410,7 +415,7 @@ def collect_answers(ask) -> dict:
         return (ask(prompt, default) or "").strip() or default
 
     name = asked("Your name", "Candidate")
-    profile_id = slugify(asked("Short id used in filenames", slugify(name)))
+    profile_id = slugify(asked("Id for your output files", slugify(name)))
 
     menu = "\n".join(f"  {i}) {choice}"
                      for i, choice in enumerate(WORK_AUTHORIZATION_CHOICES, 1))

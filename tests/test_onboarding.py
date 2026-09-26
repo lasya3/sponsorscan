@@ -740,3 +740,31 @@ def test_download_filename_handles_an_ordinary_path():
 def test_download_filename_falls_back_when_the_url_has_no_file():
     from onboarding import local_filename_for
     assert local_filename_for("https://www.dol.gov/") == "lca_download.xlsx"
+
+
+# ------------------------------------------------------------ message grammar
+
+def test_single_employer_reads_naturally(con):
+    con.execute("INSERT INTO employers (employer_norm, certified) VALUES ('a', 1)")
+    assert "1 employer loaded" in check_lca_loaded(con).message
+
+
+def test_single_posting_reads_naturally(con):
+    add_job(con, "a", "2026-09-22")
+    assert "1 posting stored" in check_jobs_fetched(con).message
+
+
+def test_single_board_and_provider_read_naturally(tmp_path):
+    path = tmp_path / "companies.yaml"
+    path.write_text(
+        "companies:\n  greenhouse:\n    - {slug: stripe, name: Stripe}\n",
+        encoding="utf-8")
+    message = check_companies_file(path).message
+    assert "1 board across 1 provider" in message
+    assert "providers" not in message
+
+
+def test_plural_forms_are_unchanged(con, tmp_path):
+    con.executemany("INSERT INTO employers (employer_norm, certified) VALUES (?, 1)",
+                    [("a",), ("b",)])
+    assert "2 employers loaded" in check_lca_loaded(con).message
