@@ -246,9 +246,21 @@ python sponsor_daily_report.py \
   --new-out new_jobs_48h.csv
 ```
 
-The report keeps a local state file so `new_jobs_48h.csv` contains jobs that were
-not present in the previous run. Keep each user's state file separate when
-running reports for more than one person.
+The report keeps a local state file so `new_jobs_48h.csv` contains only jobs it
+has never reported before. Keep each user's state file separate when running
+reports for more than one person.
+
+- **Every reported job is remembered for 60 days**, not only the ones present this
+  run. If a board fails to fetch, its jobs come back on the next good run without
+  being reported a second time.
+- **A newly tracked company starts silently.** The first time a company appears,
+  for example after `discover` adds it, its current postings go into the full
+  report but not the new-jobs file. That keeps a months-old backlog out of your
+  email. Its next opening is reported as new. A board that answered with no
+  postings already counts as tracked.
+- **The first run reports everything**, because there is nothing to compare
+  against yet. A state file from an older version is upgraded in place, and no
+  company is silenced during the upgrade run.
 
 | Flag | Effect |
 |---|---|

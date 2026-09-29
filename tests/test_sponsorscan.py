@@ -141,3 +141,31 @@ def test_fuzzy_match_below_cutoff_is_rejected():
     index = {"maplebear": {}}
     key, score = ss.match_employer("totally different", index, ["maplebear"], 90)
     assert key is None
+
+
+# ------------------------------------------------------------- fetch-jobs
+
+def test_fetch_records_boards_that_answered(monkeypatch, tmp_path):
+    import argparse
+    import sqlite3
+
+    def empty_board(slug):
+        return []
+
+    def dead_board(slug):
+        raise requests.ConnectionError("down")
+
+    monkeypatch.setattr(ss, "DB_PATH", str(tmp_path / "t.db"))
+    monkeypatch.setattr(ss, "FETCHERS", {"greenhouse": empty_board, "lever": dead_board})
+    companies = tmp_path / "companies.yaml"
+    companies.write_text(
+        "companies:\n"
+        "  greenhouse:\n    - {slug: stripe, name: Stripe}\n"
+        "  lever:\n    - {slug: plaid, name: Plaid}\n", encoding="utf-8")
+
+    ss.cmd_fetch_jobs(argparse.Namespace(companies=str(companies), replace=True, delay=0))
+
+    con = sqlite3.connect(tmp_path / "t.db")
+    fetched = {r[0] for r in con.execute("SELECT company_norm FROM fetched_companies")}
+    con.close()
+    assert fetched == {"stripe"}, "a board that failed must not count as tracked"
