@@ -6,10 +6,12 @@
 #   greenhouse  https://boards-api.greenhouse.io/v1/boards/<slug>/jobs
 #   lever       https://api.lever.co/v0/postings/<slug>?mode=json
 #   ashby       https://api.ashbyhq.com/posting-api/job-board/<slug>
+#   workday     https://<tenant>.<wdN>.myworkdayjobs.com/<site>  (a careers page)
 #
 # Easiest way to find a slug: open a company's careers page and look at the URL.
 # job-boards.greenhouse.io/acmecorp -> slug is "acmecorp".
 # jobs.lever.co/acmecorp -> "acmecorp". jobs.ashbyhq.com/acmecorp -> "acmecorp".
+# adobe.wd5.myworkdayjobs.com/external_experienced -> "adobe/wd5/external_experienced".
 #
 # `name` is what gets matched against DOL employer names, so use the legal-ish
 # company name rather than a product name. Omit it and the slug is used instead.
@@ -40,6 +42,22 @@ companies:
     - {slug: linear, name: Linear Orbit}
     - {slug: vercel, name: Vercel}
 
+  # Large employers, which file most LCAs, post on Workday. Fetching reads
+  # every listing but only opens postings from the last few days; see
+  # --workday-days. discover cannot guess these slugs, so add them by hand.
+  workday:
+    - {slug: nvidia/wd5/NVIDIAExternalCareerSite, name: NVIDIA}
+    - {slug: adobe/wd5/external_experienced, name: Adobe}
+    - {slug: salesforce/wd12/External_Career_Site, name: Salesforce}
+    - {slug: intel/wd1/External, name: Intel}
+    - {slug: capitalone/wd12/Capital_One, name: Capital One Services}
+    - {slug: workday/wd5/Workday, name: Workday}
+    - {slug: mastercard/wd1/CorporateCareers, name: Mastercard International}
+    - {slug: paypal/wd1/jobs, name: PayPal}
+    - {slug: micron/wd1/External, name: Micron Technology}
+    - {slug: broadcom/wd1/External_Career, name: Broadcom}
+    - {slug: autodesk/wd1/Ext, name: Autodesk}
+    - {slug: hp/wd5/ExternalCareerSite, name: HP}
+
 # Cap-exempt employers (universities, university-affiliated nonprofits, national
-# labs) mostly run Workday or Taleo rather than these three, so they need a
-# different fetcher. That is the next thing to add.
+# labs) often run Workday too, so their boards can be added the same way.

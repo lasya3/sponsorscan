@@ -36,6 +36,7 @@ import sqlite3
 import sys
 import time
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
 import yaml
@@ -412,9 +413,10 @@ def fetch_ashby(slug):
 # endpoint gives titles and a relative "Posted 3 Days Ago", but no description,
 # and the report needs the description for its disqualifier checks. So the list
 # is paged in full (cheap) and details are fetched only for recent postings.
-WORKDAY_MAX_AGE_DAYS = 3
+WORKDAY_MAX_AGE_DAYS = 2  # "Posted 2 Days Ago" can still be inside a 48-hour report
 WORKDAY_PAGE = 20          # the API rejects anything larger
-WORKDAY_DETAIL_DELAY = 0.1
+WORKDAY_DETAIL_DELAY = 0.1  # per request, per worker
+WORKDAY_WORKERS = 4
 _WORKDAY_AGE = re.compile(r"posted\s+(today|yesterday|(\d+)\+?\s+days?\s+ago)", re.I)
 
 
@@ -440,31 +442,45 @@ def fetch_workday(slug, max_age_days=WORKDAY_MAX_AGE_DAYS):
     api = f"https://{tenant}.{wd}.myworkdayjobs.com/wday/cxs/{tenant}/{site}"
     headers = {**UA, "Accept": "application/json"}
 
-    listed, offset = [], 0
-    while True:
+    def list_page(offset):
         r = requests.post(f"{api}/jobs", headers=headers, timeout=25, json={
             "appliedFacets": {}, "limit": WORKDAY_PAGE, "offset": offset,
             "searchText": ""})
         r.raise_for_status()
-        page = r.json().get("jobPostings") or []
-        listed.extend(page)
-        if len(page) < WORKDAY_PAGE:
-            break
-        offset += WORKDAY_PAGE
+        time.sleep(WORKDAY_DETAIL_DELAY)
+        return r.json()
 
-    out, last_error, attempted = [], None, 0
-    for j in listed:
-        age = workday_age_days(j.get("postedOn"))
-        if age is not None and age > max_age_days:
-            continue
-        attempted += 1
+    def detail(path):
         try:
-            info = _get_json(f"{api}{j.get('externalPath', '')}").get("jobPostingInfo") or {}
+            return _get_json(f"{api}{path}").get("jobPostingInfo") or {}
         except (requests.RequestException, ValueError) as exc:
-            last_error = exc
-            continue
+            return exc
         finally:
             time.sleep(WORKDAY_DETAIL_DELAY)
+
+    # The list has no usable sort order, so every page is read. The first page
+    # gives the total; the rest go through a small pool, since a big employer
+    # lists thousands of jobs at 20 a page.
+    first = list_page(0)
+    total = first.get("total") or 0
+    with ThreadPoolExecutor(WORKDAY_WORKERS) as pool:
+        pages = [first] + list(pool.map(list_page, range(WORKDAY_PAGE, total, WORKDAY_PAGE)))
+
+        # Ordering is unstable between requests, so a job can appear twice.
+        recent = {}
+        for page in pages:
+            for j in page.get("jobPostings") or []:
+                age = workday_age_days(j.get("postedOn"))
+                if age is not None and age > max_age_days:
+                    continue
+                recent.setdefault(j.get("externalPath", ""), j)
+        details = list(pool.map(detail, recent))
+
+    out, last_error = [], None
+    for (path, j), info in zip(recent.items(), details):
+        if isinstance(info, Exception):
+            last_error = info
+            continue
         places = [info.get("location") or ""] + list(info.get("additionalLocations") or [])
         location = "; ".join(p for p in places if p)
         country = (info.get("country") or {}).get("descriptor")
@@ -480,7 +496,7 @@ def fetch_workday(slug, max_age_days=WORKDAY_MAX_AGE_DAYS):
 
     # One bad detail is skipped; all of them failing means the board is down,
     # and fetch-jobs must record that rather than an empty board.
-    if attempted and not out:
+    if recent and not out:
         raise last_error
     return out
 

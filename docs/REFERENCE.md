@@ -78,9 +78,11 @@ run resumes from the cache.
 | `--max-certified 2000` | Skip employers above the specified number of certified LCAs; 0 removes the cap |
 | `--no-merge` | Overwrite `companies.yaml` instead of adding to it |
 
-Only three major ATS providers are currently covered. Workday, Taleo, iCIMS, and
-SmartRecruiters are not, which is why some large enterprises, universities, and
-hospitals will be missing.
+`discover` probes Greenhouse, Lever and Ashby. Workday boards are supported by
+`fetch-jobs` but cannot be guessed from an employer name, so add them to
+`companies.yaml` by hand; `discover` keeps them when it rewrites the file. Taleo,
+iCIMS and SmartRecruiters are not covered, which is why some large enterprises,
+universities and hospitals will be missing.
 
 ## 3. Pull live postings
 
@@ -93,6 +95,28 @@ stores them in `sponsorscan.db`.
 
 Use `--replace` when you want the jobs table to represent the latest full fetch.
 Run the same command again whenever you want refreshed postings.
+
+### Workday boards
+
+A Workday slug is `tenant/wdN/site`, read from the careers page URL:
+`adobe.wd5.myworkdayjobs.com/external_experienced` becomes
+`adobe/wd5/external_experienced`.
+
+```yaml
+companies:
+  workday:
+    - {slug: adobe/wd5/external_experienced, name: Adobe}
+```
+
+Workday's job list has no descriptions, and the report needs them to check for
+citizenship, degree and experience requirements. So `fetch-jobs` reads the whole
+list but opens only postings from the last two days, one request each. Large
+employers list thousands of jobs, so a Workday fetch takes minutes rather than
+seconds.
+
+| Flag | Effect |
+|---|---|
+| `--workday-days 5` | Open Workday postings up to 5 days old. Raise it when running the report with `--hours` above 48, or older postings will be missing |
 
 ## 4. Generate the standard report
 

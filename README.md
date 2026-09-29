@@ -9,7 +9,7 @@ It joins two sources that cannot go stale on someone else's schedule:
 
 - **DOL OFLC LCA disclosure data.** Quarterly, official, a legal filing
   requirement. Free bulk download, no API key.
-- **Public ATS job board APIs** (Greenhouse, Lever, Ashby). Served straight from
+- **Public ATS job board APIs** (Greenhouse, Lever, Ashby, Workday). Served straight from
   the employer, no aggregator in between.
 
 The core workflow is:
@@ -105,7 +105,7 @@ This takes a few minutes. Re-run it when the DOL publishes a new quarterly file.
 python sponsorscan.py fetch-jobs --replace
 ```
 
-`companies.yaml` already ships with 19 confirmed job boards, so this
+`companies.yaml` already ships with 31 confirmed job boards, so this
 works immediately. There is no list to build first.
 
 ### 3. Generate the report

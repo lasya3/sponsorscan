@@ -277,3 +277,37 @@ def test_fetch_passes_the_workday_window(monkeypatch, tmp_path):
     ss.cmd_fetch_jobs(argparse.Namespace(
         companies=str(companies), replace=True, delay=0, workday_days=7))
     assert seen == {"adobe/wd5/ext": 7}
+
+
+def test_workday_job_listed_twice_is_fetched_once(monkeypatch):
+    fake = _FakeWorkday(["Posted Today"] * 25)
+    real_post = fake.post
+
+    def post_with_repeat(url, json=None, **kwargs):
+        r = real_post(url, json=json, **kwargs)
+        if json["offset"] == 20:  # unstable ordering repeats a job from page one
+            body = r.json()
+            body["jobPostings"].append({"title": "Engineer 0", "postedOn": "Posted Today",
+                                        "externalPath": "/job/Place/Engineer_R0"})
+            r._content = __import__("json").dumps(body).encode()
+        return r
+
+    fake.post = post_with_repeat
+    _install(monkeypatch, fake)
+    ss.fetch_workday("acme/wd5/Ext", max_age_days=3)
+    assert sorted(fake.detail_calls) == list(range(25))
+
+
+def test_workday_board_fails_when_a_list_page_fails(monkeypatch):
+    fake = _FakeWorkday(["Posted Today"] * 45)
+    real_post = fake.post
+
+    def flaky_post(url, json=None, **kwargs):
+        if json["offset"] == 20:
+            return fake._response({}, status=503)
+        return real_post(url, json=json, **kwargs)
+
+    fake.post = flaky_post
+    _install(monkeypatch, fake)
+    with pytest.raises(requests.HTTPError):
+        ss.fetch_workday("acme/wd5/Ext", max_age_days=3)
