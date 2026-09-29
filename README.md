@@ -4,7 +4,9 @@
 
 <p align="center">
   <img src="assets/job-boards.gif"
-       alt="Live postings from Greenhouse, Lever, Ashby and Workday" width="100%">
+       alt="Live postings from Greenhouse, Lever, Ashby and Workday" width="100%"><br>
+  <img src="assets/citizens-marquee.svg"
+       alt="Also for U.S. citizens and green card holders" width="100%">
 </p>
 
 Finds entry-level postings at employers with real H-1B filing history, and drops
