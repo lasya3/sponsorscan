@@ -12,6 +12,8 @@ Run it after a fetch:
     python sponsor_daily_report.py --profile profiles/my_profile.json
 
 On the first run every match counts as new, because there is no prior snapshot.
+After that, a company seen for the first time is recorded without counting as
+new, so adding a company does not report its whole existing board.
 """
 
 import argparse
@@ -771,22 +773,48 @@ def priority_label(score, resume_fit):
 
 # --------------------------------------------------------------- state I/O
 
+# The state remembers every match it has reported, not only the ones present
+# this run. A job missing for a run (its board failed to fetch, or it briefly
+# fell out of the filters) is still remembered when it comes back, so it is not
+# reported twice. Keys unseen for this long are forgotten to bound the file.
+SEEN_RETENTION_DAYS = 60
+
+
 def load_previous_state(path):
+    """Return (seen, companies).
+
+    seen maps job key to the ISO date it was last matched. companies is the set
+    of employers already tracked, or None when there is nothing to baseline
+    against: no state yet, or a state written before companies were recorded.
+    """
     if not path.exists():
-        return set()
+        return {}, None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        return set(data.get("active_job_keys", []))
     except (json.JSONDecodeError, OSError):
-        return set()
+        return {}, None
+    if "seen" in data:
+        return dict(data["seen"]), set(data.get("companies", []))
+    today = datetime.now(timezone.utc).date().isoformat()
+    return {key: today for key in data.get("active_job_keys", [])}, None
 
 
-def save_state(path, keys):
+def save_state(path, seen, companies):
     payload = {
+        "version": 2,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
-        "active_job_keys": sorted(keys),
+        "seen": dict(sorted(seen.items())),
+        "companies": sorted(companies),
     }
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def update_seen(seen, current_keys, today):
+    """Stamp this run's keys with today and drop those unseen past retention."""
+    cutoff = (today - timedelta(days=SEEN_RETENTION_DAYS)).isoformat()
+    updated = {key: day for key, day in seen.items() if day >= cutoff}
+    updated.update({key: today.isoformat() for key in current_keys})
+    return updated
 
 
 def write_csv(path, rows, fieldnames):
@@ -919,7 +947,8 @@ def main():
     preferred_locations = (profile or {}).get("preferred_locations") or []
 
     state_path = Path(args.state)
-    previous_keys = set() if args.reset_state else load_previous_state(state_path)
+    seen, tracked_companies = ({}, None) if args.reset_state \
+        else load_previous_state(state_path)
 
     now_utc = datetime.now(timezone.utc)
     posted_cutoff = now_utc - timedelta(hours=args.hours)
@@ -934,6 +963,14 @@ def main():
             ).fetchall()
         except sqlite3.OperationalError as exc:
             raise SystemExit(f"Could not read jobs table: {exc}")
+        # Every employer on the boards this run, including boards that fetched
+        # cleanly with no postings, which fetch-jobs records separately.
+        companies_now = {row[1] for row in jobs if row[1]}
+        try:
+            companies_now.update(
+                r[0] for r in con.execute("SELECT company_norm FROM fetched_companies"))
+        except sqlite3.OperationalError:
+            pass  # a database written before fetch-jobs recorded boards
     finally:
         con.close()
 
@@ -948,6 +985,7 @@ def main():
         "location": 0, "score": 0,
         "posted_too_old": 0, "posted_unknown": 0,
     }
+    baselined = {}  # company_norm -> matches recorded without alerting
 
     for company, company_norm, title, location, url, posted, description, source in jobs:
         parsed_posted = parse_posted_datetime(posted)
@@ -1019,6 +1057,17 @@ def main():
 
         key = stable_job_key(company, title, location, url)
 
+        # An employer seen for the first time has its whole board looking new,
+        # usually months-old postings. Record those quietly; alerts start from
+        # its next genuine opening.
+        if key in seen:
+            is_new = False
+        elif tracked_companies is not None and company_norm not in tracked_companies:
+            is_new = False
+            baselined[company_norm] = baselined.get(company_norm, 0) + 1
+        else:
+            is_new = True
+
         reasons = [f"{resume_fit}/100 resume fit", role_family, f"company tier {tier}/5"]
         reasons.extend(bonus_signals)
         reasons.extend(level_signals)
@@ -1032,7 +1081,7 @@ def main():
             "company_tier": tier,
             "company_fit_points": company_points,
             "sponsorship_score": sponsor_points,
-            "is_new_since_last_run": "YES" if key not in previous_keys else "NO",
+            "is_new_since_last_run": "YES" if is_new else "NO",
             "role_family": role_family,
             "matched_resume_skills": ", ".join(skills),
             "experience_years_detected": years_required if years_required is not None else "",
@@ -1062,14 +1111,21 @@ def main():
 
     write_csv(Path(args.out), results, CSV_FIELDS)
     write_csv(Path(args.new_out), new_results, CSV_FIELDS)
-    save_state(state_path, {row["job_key"] for row in results})
+    save_state(state_path,
+               update_seen(seen, {row["job_key"] for row in results}, now_utc.date()),
+               (tracked_companies or set()) | companies_now)
 
     print(f"Wrote {len(results):,} jobs posted within the last {args.hours:g} hours "
           f"to {args.out}")
     print(f"Wrote {len(new_results):,} jobs new since the previous run to {args.new_out}")
     print(f"Posting cutoff (UTC): {posted_cutoff.isoformat()}")
-    if not previous_keys:
+    if not seen:
         print("No previous snapshot was found, so all current matches count as new.")
+    if baselined:
+        n_matches, n_companies = sum(baselined.values()), len(baselined)
+        print(f"{n_matches:,} match{'es' if n_matches != 1 else ''} at "
+              f"{n_companies:,} newly tracked compan{'ies' if n_companies != 1 else 'y'} "
+              f"recorded without alerting; new postings there are reported from the next run.")
     print()
     print(f"{counts['posted_too_old']:,} dropped as older than {args.hours:g} hours")
     print(f"{counts['posted_unknown']:,} dropped for having no usable posting time")

@@ -139,6 +139,114 @@ def test_reset_state_makes_everything_new_again(workspace):
     assert read_csv(workspace / "new.csv")
 
 
+# Tracking across runs. A job leaves the database when its board fails to
+# fetch, and comes back on the next good run; that must not read as new.
+
+def add_job(workspace, job_id, company, title="Software Engineer, New Grad",
+            location="San Francisco, CA", description="Python."):
+    from sponsorscan import norm_employer
+    posted = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    con = sqlite3.connect(workspace / "sponsorscan.db")
+    con.execute(
+        "INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (f"test:{job_id}", "test", company, norm_employer(company), title, location,
+         f"https://example.com/jobs/{job_id}", posted, description, "2026-09-15"))
+    con.commit()
+    con.close()
+
+
+def remove_company_jobs(workspace, company):
+    con = sqlite3.connect(workspace / "sponsorscan.db")
+    rows = con.execute("SELECT * FROM jobs WHERE company = ?", (company,)).fetchall()
+    con.execute("DELETE FROM jobs WHERE company = ?", (company,))
+    con.commit()
+    con.close()
+    return rows
+
+
+def restore_jobs(workspace, rows):
+    con = sqlite3.connect(workspace / "sponsorscan.db")
+    con.executemany("INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?,?)", rows)
+    con.commit()
+    con.close()
+
+
+def new_titles(workspace):
+    return {(r["company"], r["title"]) for r in read_csv(workspace / "new.csv")}
+
+
+def test_failed_board_does_not_resend_its_jobs(workspace):
+    run_report(workspace)
+    rows = remove_company_jobs(workspace, "Databricks")
+    run_report(workspace)
+    restore_jobs(workspace, rows)
+    run_report(workspace)
+    assert new_titles(workspace) == set()
+
+
+def test_new_posting_at_a_tracked_company_is_new(workspace):
+    run_report(workspace)
+    add_job(workspace, 100, "Databricks", title="Data Engineer, New Grad")
+    run_report(workspace)
+    assert new_titles(workspace) == {("Databricks", "Data Engineer, New Grad")}
+
+
+def test_first_sighting_of_a_company_is_a_silent_baseline(workspace):
+    run_report(workspace)
+    add_job(workspace, 100, "Stripe")
+    output = run_report(workspace)
+
+    assert new_titles(workspace) == set()
+    assert ("Stripe", "Software Engineer, New Grad") in {
+        (r["company"], r["title"]) for r in read_csv(workspace / "all.csv")}
+    assert "1 match at 1 newly tracked company" in output
+
+    add_job(workspace, 101, "Stripe", title="Data Engineer, New Grad")
+    run_report(workspace)
+    assert new_titles(workspace) == {("Stripe", "Data Engineer, New Grad")}
+
+
+def test_company_fetched_with_no_postings_is_already_tracked(workspace):
+    run_report(workspace)
+    con = sqlite3.connect(workspace / "sponsorscan.db")
+    con.execute("CREATE TABLE fetched_companies (company_norm TEXT PRIMARY KEY, "
+                "fetched_at TEXT)")
+    con.execute("INSERT INTO fetched_companies VALUES ('stripe', '2026-09-15')")
+    con.commit()
+    con.close()
+    run_report(workspace)
+
+    add_job(workspace, 100, "Stripe")
+    run_report(workspace)
+    assert new_titles(workspace) == {("Stripe", "Software Engineer, New Grad")}
+
+
+def test_old_state_format_is_upgraded_without_silencing(workspace):
+    run_report(workspace)
+    keys = [r["job_key"] for r in read_csv(workspace / "all.csv")]
+    (workspace / "state.json").write_text(
+        json.dumps({"active_job_keys": keys}), encoding="utf-8")
+
+    add_job(workspace, 100, "Stripe")
+    run_report(workspace)
+    assert new_titles(workspace) == {("Stripe", "Software Engineer, New Grad")}
+
+
+def test_long_unseen_keys_are_forgotten(workspace):
+    today = datetime.now(timezone.utc).date()
+    (workspace / "state.json").write_text(json.dumps({
+        "version": 2,
+        "seen": {"stale": (today - timedelta(days=400)).isoformat(),
+                 "recent": (today - timedelta(days=5)).isoformat()},
+        "companies": [],
+    }), encoding="utf-8")
+    run_report(workspace)
+
+    seen = json.loads((workspace / "state.json").read_text(encoding="utf-8"))["seen"]
+    assert "stale" not in seen
+    assert "recent" in seen
+
+
 def test_profile_drives_roles_and_tiers(workspace, tmp_path):
     profile = tmp_path / "profile.json"
     profile.write_text(json.dumps({

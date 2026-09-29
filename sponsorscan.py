@@ -105,6 +105,10 @@ CREATE TABLE IF NOT EXISTS jobs (
     fetched_at   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_norm ON jobs(company_norm);
+CREATE TABLE IF NOT EXISTS fetched_companies (
+    company_norm TEXT PRIMARY KEY,
+    fetched_at   TEXT
+);
 CREATE TABLE IF NOT EXISTS probe_cache (
     provider   TEXT,
     slug       TEXT,
@@ -414,6 +418,7 @@ def cmd_fetch_jobs(args):
     con = connect()
     if args.replace:
         con.execute("DELETE FROM jobs")
+        con.execute("DELETE FROM fetched_companies")
 
     total, failed = 0, []
     for provider, entries in (cfg.get("companies") or {}).items():
@@ -441,6 +446,12 @@ def cmd_fetch_jobs(args):
                 "INSERT OR REPLACE INTO jobs (job_key, source, company, company_norm, "
                 "title, location, url, posted, description, fetched_at) "
                 "VALUES (?,?,?,?,?,?,?,?,?,?)", rows)
+            # The report baselines employers it has not tracked before. A board
+            # that answered with no postings is tracked all the same, so its
+            # first real opening is reported rather than silenced.
+            con.execute(
+                "INSERT OR REPLACE INTO fetched_companies VALUES (?, ?)",
+                (norm_employer(display), time.strftime("%Y-%m-%d %H:%M")))
             con.commit()
             total += len(rows)
             print(f"  {display:<28} {provider:<11} {len(rows):>4} postings")
