@@ -58,6 +58,7 @@ companies:
     - {slug: broadcom/wd1/External_Career, name: Broadcom}
     - {slug: autodesk/wd1/Ext, name: Autodesk}
     - {slug: hp/wd5/ExternalCareerSite, name: HP}
+    - {slug: cisco/wd5/cisco_careers, name: Cisco Systems}
 
 # Cap-exempt employers (universities, university-affiliated nonprofits, national
 # labs) often run Workday too, so their boards can be added the same way.

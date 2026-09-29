@@ -133,6 +133,9 @@ def connect():
     for col in ("lvl1", "lvl2", "lvl3", "lvl4"):
         if col not in have:
             con.execute(f"ALTER TABLE employers ADD COLUMN {col} INTEGER DEFAULT 0")
+    # A Workday guess is a tenant name; the board it resolves to is stored here.
+    if "resolved" not in {r[1] for r in con.execute("PRAGMA table_info(probe_cache)")}:
+        con.execute("ALTER TABLE probe_cache ADD COLUMN resolved TEXT")
     con.commit()
     return con
 
@@ -232,11 +235,20 @@ def cmd_load_lca(args):
         import onboarding
         local = onboarding.local_filename_for(src)
         print(f"Downloading {src} -> {local} (this file is typically 100-400 MB)")
-        with requests.get(src, stream=True, headers=UA, timeout=120) as r:
-            r.raise_for_status()
-            with open(local, "wb") as fh:
-                for chunk in r.iter_content(1 << 20):
-                    fh.write(chunk)
+        try:
+            with requests.get(src, stream=True, headers=UA, timeout=120) as r:
+                r.raise_for_status()
+                with open(local, "wb") as fh:
+                    for chunk in r.iter_content(1 << 20):
+                        fh.write(chunk)
+        except requests.RequestException as exc:
+            if os.path.exists(local):
+                os.remove(local)  # a partial file would load as a short dataset
+            # Nothing has been deleted yet, so an existing database is intact.
+            raise SystemExit(
+                f"Could not download {src}: {exc}\n"
+                "The DOL site blocks some networks, including GitHub's runners. "
+                "Download the file in a browser and pass its local path instead.")
         src = local
 
     if not os.path.exists(src):
@@ -654,9 +666,139 @@ def probe(provider, slug, timeout=12):
     return isinstance(data, dict) and "jobs" in data, len(data.get("jobs", []))
 
 
+# Workday data centers, most common first. Every other wdN host is absent from
+# DNS. A slug is tenant/wdN/site: the tenant is guessable from the employer
+# name, the data center is found by trying each host, and the site is guessed
+# from names employers commonly use. Site names are case-insensitive.
+WORKDAY_HOSTS = ("wd1", "wd5", "wd12", "wd3", "wd10", "wd103", "wd108", "wd102",
+                 "wd105", "wd107", "wd109", "wd501", "wd502", "wd503", "wd504")
+WORKDAY_SITES = ("external", "careers", "externalcareers", "external_careers",
+                 "externalcareersite", "external_career_site", "external_career",
+                 "external_experienced", "corporatecareers", "ext", "jobs",
+                 "{t}", "{t}careers", "{t}_careers", "{t}external", "{t}_external",
+                 "{t}externalcareersite", "{t}_external_career_site", "{n}", "{n}_careers")
+
+
+def _workday_status(tenant, wd, site, timeout):
+    """(status code or None, total jobs) for one tenant/wd/site guess."""
+    url = f"https://{tenant}.{wd}.myworkdayjobs.com/wday/cxs/{tenant}/{site}/jobs"
+    try:
+        r = requests.post(url, headers={**UA, "Accept": "application/json"},
+                          timeout=timeout, json={"appliedFacets": {}, "limit": 1,
+                                                 "offset": 0, "searchText": ""})
+    except requests.RequestException:
+        return None, 0
+    total = 0
+    if r.status_code == 200:
+        try:
+            total = r.json().get("total") or 0
+        except ValueError:
+            return None, 0
+    return r.status_code, total
+
+
+def find_workday_board(tenant, name, timeout=12):
+    """Return (ok, slug, n_jobs) for a Workday tenant guess.
+
+    ok is True with the full slug on a hit. It is False with slug None when no
+    data center knows the tenant, and False with a partial "tenant/wdN" slug
+    when the tenant exists but none of the common site names match, so the
+    caller can report it for a manual lookup. It is None when an error
+    (429, 5xx, timeout) made the answer uncertain, which must not be cached.
+    """
+    for wd in WORKDAY_HOSTS:
+        status, total = _workday_status(tenant, wd, "external", timeout)
+        if status == 422:
+            continue            # unknown tenant on this data center
+        if status == 200:
+            return True, f"{tenant}/{wd}/external", total
+        if status != 404:
+            return None, None, 0
+
+        words = [t for t in norm_employer(name).split() if t not in _SLUG_DROP]
+        sites = dict.fromkeys(s.format(t=tenant, n="_".join(words))
+                              for s in WORKDAY_SITES[1:])
+        for site in sites:
+            status, total = _workday_status(tenant, wd, site, timeout)
+            if status == 200:
+                return True, f"{tenant}/{wd}/{site}", total
+            if status != 404:
+                return None, None, 0
+        return False, f"{tenant}/{wd}", 0
+    return False, None, 0
+
+
 DEFAULT_ROLES = ("software", "developer", "engineer", "data scien", "data analyst",
                  "machine learning", "computer", "research", "programmer",
                  "statistician", "analyst")
+
+
+def _discover_workday(con, candidates, args):
+    """Search Workday for the heavier filers. Returns {display: [(slug, n)]}.
+
+    Each tenant guess can cost a request per data center, so this is opt-in
+    and limited to employers with at least --workday-min-certified filings,
+    which is where Workday users are. Every definite answer is cached.
+    """
+    from concurrent.futures import as_completed
+
+    targets = [(d, c) for _, d, c in candidates if c >= args.workday_min_certified]
+    cached = {slug: (ok, n, resolved) for slug, ok, n, resolved in con.execute(
+        "SELECT slug, ok, n_jobs, resolved FROM probe_cache WHERE provider = 'workday'")}
+
+    pending = {}
+    for display, certified in targets:
+        for tenant in slug_candidates(display):
+            if "-" in tenant or tenant in cached:
+                continue  # Workday tenants have no hyphens
+            if tenant not in pending or certified > pending[tenant][1]:
+                pending[tenant] = (display, certified)
+
+    print(f"\nWorkday: {len(targets):,} employers with >= {args.workday_min_certified} "
+          f"certified LCAs, {len(pending):,} tenant guesses to try "
+          f"({len(cached):,} already cached).")
+    transient = 0
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        futs = {pool.submit(find_workday_board, t, d): (t, d) for t, (d, _) in pending.items()}
+        try:
+            for fut in as_completed(futs):
+                tenant, display = futs[fut]
+                try:
+                    ok, board, n = fut.result()
+                except Exception:
+                    ok, board, n = None, None, 0
+                if ok is None:
+                    transient += 1
+                    continue
+                con.execute(
+                    "INSERT OR REPLACE INTO probe_cache VALUES (?,?,?,?,?,?)",
+                    ("workday", tenant, int(ok), n, time.strftime("%Y-%m-%d"), board))
+                con.commit()
+                cached[tenant] = (ok, n, board)
+                if ok:
+                    print(f"  HIT workday     {board:<40} {n:>4} jobs   ({display})")
+        except KeyboardInterrupt:
+            print("\nInterrupted. Workday answers so far are cached.")
+            pool.shutdown(wait=False, cancel_futures=True)
+    if transient:
+        print(f"  {transient:,} Workday search(es) failed transiently and were left "
+              f"uncached. Re-run to retry them.")
+
+    found, partial = {}, []
+    for display, _ in targets:
+        for tenant in slug_candidates(display):
+            ok, n, board = cached.get(tenant, (False, 0, None))
+            if ok:
+                found.setdefault(display, []).append((board, n))
+            elif board:
+                partial.append((board, display))
+    if partial:
+        print("  Workday tenants found, but not their site name. Open the employer's "
+              "careers page, copy the part after myworkdayjobs.com/, and add "
+              "tenant/wdN/site to companies.yaml by hand:")
+        for board, display in sorted(set(partial)):
+            print(f"    {board:<24} {display}")
+    return found
 
 
 def cmd_discover(args):
@@ -736,7 +878,8 @@ def cmd_discover(args):
                         transient += 1
                         continue
                     con.execute(
-                        "INSERT OR REPLACE INTO probe_cache VALUES (?,?,?,?,?)",
+                        "INSERT OR REPLACE INTO probe_cache "
+                        "(provider, slug, ok, n_jobs, checked_at) VALUES (?,?,?,?,?)",
                         (provider, slug, int(ok), n, time.strftime("%Y-%m-%d")))
                     if ok:
                         cache[(provider, slug)] = (True, n)
@@ -752,6 +895,9 @@ def cmd_discover(args):
         print(f"  {transient:,} probe(s) failed transiently (timeout, rate limit "
               f"or server error) and were left uncached. Re-run to retry them.")
 
+    workday = _discover_workday(con, candidates, args) \
+        if getattr(args, "workday", False) else {}
+
     # Rebuild the company list from every cached hit that maps to a candidate.
     by_display = {}
     for norm, display, certified in candidates:
@@ -762,6 +908,10 @@ def cmd_discover(args):
                     prev = by_display.get(display)
                     if prev is None or n > prev[2]:
                         by_display[display] = (provider, slug, n, certified)
+        for board, n in workday.get(display, []):
+            prev = by_display.get(display)
+            if prev is None or n > prev[2]:
+                by_display[display] = ("workday", board, n, certified)
 
     existing = {}
     if args.merge and os.path.exists(args.out):
@@ -770,7 +920,7 @@ def cmd_discover(args):
 
     # Providers discover cannot probe, such as Workday, are carried over as-is.
     merged = {p: list(v or []) for p, v in existing.items()}
-    for p in PROBE_URLS:
+    for p in (*PROBE_URLS, "workday"):
         merged.setdefault(p, [])
     seen = {p: {(e.get("slug") if isinstance(e, dict) else e) for e in merged[p]}
             for p in merged}
@@ -1060,6 +1210,12 @@ def main():
     d.add_argument("--max-certified", type=int, default=0,
                    help="Skip employers above this many certified LCAs "
                         "(0 = no cap). Use to exclude the handful of mega-filers.")
+    d.add_argument("--workday", action="store_true",
+                   help="Also search Workday boards. Slower: up to one request per "
+                        "Workday data center for each guess")
+    d.add_argument("--workday-min-certified", type=int, default=100,
+                   help="Only search Workday for employers with at least this many "
+                        "certified LCAs (default 100)")
     d.add_argument("--no-merge", dest="merge", action="store_false",
                    help="Overwrite the company list instead of merging into it")
     d.set_defaults(func=cmd_discover, merge=True)

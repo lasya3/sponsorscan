@@ -2,6 +2,11 @@
   <img src="assets/banner.svg" alt="sponsorscan" width="100%">
 </p>
 
+<p align="center">
+  <img src="assets/job-boards.gif"
+       alt="Live postings from Greenhouse, Lever, Ashby and Workday" width="560">
+</p>
+
 Finds entry-level postings at employers with real H-1B filing history, and drops
 the ones that disqualify you outright.
 
@@ -105,7 +110,7 @@ This takes a few minutes. Re-run it when the DOL publishes a new quarterly file.
 python sponsorscan.py fetch-jobs --replace
 ```
 
-`companies.yaml` already ships with 31 confirmed job boards, so this
+`companies.yaml` already ships with 32 confirmed job boards, so this
 works immediately. There is no list to build first.
 
 ### 3. Generate the report

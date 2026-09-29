@@ -368,3 +368,99 @@ def test_fetch_records_failed_boards(monkeypatch, tmp_path):
     rows = con.execute("SELECT board, error FROM fetch_failures").fetchall()
     con.close()
     assert rows == [("lever/plaid", "connection refused")]
+
+
+# --------------------------------------------------------------- load-lca
+#
+# The example workflow keeps a cached database and only refreshes it. When the
+# DOL site blocks the runner, the cached employers must survive the attempt.
+
+def _db_with_employer(monkeypatch, tmp_path):
+    import sqlite3
+    monkeypatch.setattr(ss, "DB_PATH", str(tmp_path / "t.db"))
+    con = ss.connect()
+    con.execute("INSERT INTO employers (employer_norm, certified) VALUES ('acme', 5)")
+    con.commit()
+    con.close()
+    return lambda: sqlite3.connect(tmp_path / "t.db").execute(
+        "SELECT COUNT(*) FROM employers").fetchone()[0]
+
+
+def _blocked(*a, **k):
+    r = requests.Response()
+    r.status_code = 403
+    r.url = "https://www.dol.gov/"
+    r.raw = __import__("io").BytesIO(b"")
+    return r
+
+
+def test_blocked_dol_site_keeps_cached_employers(monkeypatch, tmp_path):
+    import argparse
+    count = _db_with_employer(monkeypatch, tmp_path)
+    monkeypatch.setattr(requests, "get", _blocked)
+    with pytest.raises(SystemExit):
+        ss.cmd_load_lca(argparse.Namespace(path=None, latest=True, replace=True))
+    assert count() == 1
+
+
+def test_failed_download_exits_cleanly_and_keeps_employers(monkeypatch, tmp_path):
+    import argparse
+    count = _db_with_employer(monkeypatch, tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(requests, "get", _blocked)
+    with pytest.raises(SystemExit, match="Could not download"):
+        ss.cmd_load_lca(argparse.Namespace(
+            path="https://example.com/LCA_Disclosure_Data_FY2026_Q3.xlsx",
+            latest=False, replace=True))
+    assert count() == 1
+
+
+# ------------------------------------------------------- workday discovery
+#
+# Workday answers 422 for an unknown tenant or the wrong data center, 404 for
+# the right tenant and data center with the wrong site, and 200 for a hit.
+
+def _workday_server(monkeypatch, tenant, wd, site, total=7, other=None):
+    def post(url, json=None, **kwargs):
+        host, path = url.split("//", 1)[1].split("/", 1)
+        t, w = host.split(".")[:2]
+        s = path.split("/")[3]
+        r = requests.Response()
+        if other is not None:
+            r.status_code = other
+        elif t != tenant or w != wd:
+            r.status_code = 422
+        elif s != site:
+            r.status_code = 404
+        else:
+            r.status_code = 200
+        r._content = __import__("json").dumps({"total": total, "jobPostings": []}).encode()
+        return r
+    monkeypatch.setattr(requests, "post", post)
+
+
+def test_workday_board_found_on_a_later_data_center(monkeypatch):
+    _workday_server(monkeypatch, "acme", "wd12", "careers")
+    assert ss.find_workday_board("acme", "Acme Corp") == (True, "acme/wd12/careers", 7)
+
+
+def test_workday_site_built_from_the_employer_name(monkeypatch):
+    _workday_server(monkeypatch, "capitalone", "wd12", "capital_one")
+    ok, slug, _ = ss.find_workday_board("capitalone", "Capital One Services")
+    assert (ok, slug) == (True, "capitalone/wd12/capital_one")
+
+
+def test_workday_tenant_found_without_its_site(monkeypatch):
+    _workday_server(monkeypatch, "acme", "wd5", "somethingbespoke")
+    assert ss.find_workday_board("acme", "Acme") == (False, "acme/wd5", 0)
+
+
+def test_workday_unknown_tenant_is_a_definite_miss(monkeypatch):
+    _workday_server(monkeypatch, "someoneelse", "wd1", "external")
+    assert ss.find_workday_board("acme", "Acme") == (False, None, 0)
+
+
+@pytest.mark.parametrize("status", [429, 500, 503])
+def test_workday_transient_errors_are_not_a_miss(monkeypatch, status):
+    _workday_server(monkeypatch, "acme", "wd1", "external", other=status)
+    assert ss.find_workday_board("acme", "Acme") == (None, None, 0)
