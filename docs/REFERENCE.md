@@ -77,12 +77,24 @@ run resumes from the cache.
 | `--min-certified 15` | Require heavier sponsorship history; default is 5 |
 | `--max-certified 2000` | Skip employers above the specified number of certified LCAs; 0 removes the cap |
 | `--no-merge` | Overwrite `companies.yaml` instead of adding to it |
+| `--workday` | Also search Workday boards, where most large employers post |
+| `--workday-min-certified 50` | Search Workday only for employers with at least this many certified LCAs; default 100 |
 
-`discover` probes Greenhouse, Lever and Ashby. Workday boards are supported by
-`fetch-jobs` but cannot be guessed from an employer name, so add them to
-`companies.yaml` by hand; `discover` keeps them when it rewrites the file. Taleo,
-iCIMS and SmartRecruiters are not covered, which is why some large enterprises,
-universities and hospitals will be missing.
+`discover` probes Greenhouse, Lever and Ashby by default. `--workday` adds a
+slower search. For each guessed tenant it tries each of Workday's data centers,
+then common site names such as `external` and `careers`. That is up to about 35
+requests per employer, so it only covers heavier filers. In testing it found 9 of
+12 known boards on its own.
+
+When it finds an employer on Workday but cannot guess the site name, it prints
+the partial slug, such as `adobe/wd5`. Open that employer's careers page, copy
+the part of the URL after `myworkdayjobs.com/`, and add the full
+`tenant/wdN/site` to `companies.yaml` by hand. Some employers use a tenant name
+unrelated to their own (Morgan Stanley's is `ms`), and those can only be added by
+hand. `discover` keeps hand-added entries when it rewrites the file.
+
+Taleo, iCIMS and SmartRecruiters are not covered, which is why some universities
+and hospitals will be missing.
 
 ## 3. Pull live postings
 

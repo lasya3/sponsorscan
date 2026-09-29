@@ -153,6 +153,7 @@ if os.path.exists("test_companies.yaml"):
 class A:  # stand-in for argparse.Namespace
     out = "test_companies.yaml"; min_certified = 1; roles = ""; states = ""
     limit = 100; workers = 4; max_certified = 0; merge = True
+    workday = False; workday_min_certified = 1
 
 
 ss.DB_PATH = "test.db"
@@ -183,6 +184,29 @@ with open("test_companies.yaml") as fh:
     kept = _yaml.safe_load(fh)["companies"].get("workday") or []
 assert [e["slug"] for e in kept] == ["adobe/wd5/external_experienced"], kept
 print("PASS  discover keeps providers it cannot probe")
+
+# --workday searches Workday tenants, records hits, and caches every answer
+WORKDAY_BOARDS = {"nuro": (True, "nuro/wd5/external", 50),
+                  "benchling": (False, "benchling/wd1", 0)}
+calls = []
+
+
+def fake_find(tenant, name, timeout=12):
+    calls.append(tenant)
+    return WORKDAY_BOARDS.get(tenant, (False, None, 0))
+
+
+ss.find_workday_board = fake_find
+A.workday = True
+ss.cmd_discover(A())
+with open("test_companies.yaml") as fh:
+    wd = {e["slug"] for e in _yaml.safe_load(fh)["companies"]["workday"]}
+assert "nuro/wd5/external" in wd, "busier Workday board should win over Lever"
+assert not any(s.startswith("benchling") for s in wd), "partial match must not be listed"
+n_calls = len(calls)
+ss.cmd_discover(A())
+assert len(calls) == n_calls, "workday answers should come from the cache"
+print("PASS  discover --workday finds boards and caches the search")
 
 for f in ("test.db", "test_lca.csv", "test_out.csv", "test_companies.yaml"):
     if os.path.exists(f):
