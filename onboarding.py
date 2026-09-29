@@ -121,9 +121,15 @@ def _table_count(con, table: str) -> int | None:
         return None
 
 
-def check_lca_loaded(con) -> CheckResult:
-    """The employers table is populated by `load-lca`."""
+def check_lca_loaded(con, profile=None) -> CheckResult:
+    """The employers table is populated by `load-lca`. A profile that needs no
+    sponsorship does not need it at all."""
+    from profile_loader import needs_sponsorship
+
     count = _table_count(con, "employers")
+    if not needs_sponsorship(profile):
+        auth = profile.get("work_authorization")
+        return CheckResult("LCA data", "OK", f"Not needed for a {auth} profile")
     if not count:
         return CheckResult(
             "LCA data", "FAIL", "No employer records loaded",
@@ -267,13 +273,16 @@ def warn_optional_dependencies(modules=OPTIONAL_MODULES) -> CheckResult:
     return CheckResult("Optional dependencies", "OK", "All installed")
 
 
-def check_database(path) -> CheckResult:
+def check_database(path, profile=None) -> CheckResult:
     """The SQLite file exists. Its contents are judged by the later checks."""
+    from profile_loader import needs_sponsorship
+
     path = Path(path)
     if not path.exists():
-        return CheckResult(
-            "Database", "FAIL", f"{path} not found",
-            "python sponsorscan.py load-lca <file.xlsx> --replace")
+        # Whichever command runs first creates the file. A profile that needs
+        # no sponsorship never loads LCA data, so fetch-jobs is its first step.
+        first = "python sponsorscan.py load-lca <file.xlsx> --replace"             if needs_sponsorship(profile) else "python sponsorscan.py fetch-jobs --replace"
+        return CheckResult("Database", "FAIL", f"{path} not found", first)
     size_mb = path.stat().st_size / (1024 * 1024)
     return CheckResult("Database", "OK", f"{path.name} ({size_mb:.1f} MB)")
 
@@ -326,13 +335,18 @@ def run_checks(db_path, companies_path, profile_path, env, today) -> list[CheckR
     """
     results = [check_dependencies(), warn_optional_dependencies()]
 
-    db_result = check_database(db_path)
+    # Read early because whether LCA data is required depends on the profile.
+    profile_result = check_profile(profile_path) if profile_path is not None else None
+    profile = load_profile(profile_path) \
+        if profile_result is not None and profile_result.status == "OK" else None
+
+    db_result = check_database(db_path, profile)
     results.append(db_result)
 
     if db_result.status == "OK":
         con = sqlite3.connect(db_path)
         try:
-            results.append(check_lca_loaded(con))
+            results.append(check_lca_loaded(con, profile))
             results.append(check_jobs_fetched(con))
             results.append(warn_stale_jobs(con, today=today))
         finally:
@@ -340,11 +354,9 @@ def run_checks(db_path, companies_path, profile_path, env, today) -> list[CheckR
 
     results.append(check_companies_file(companies_path))
 
-    if profile_path is not None:
-        profile_result = check_profile(profile_path)
+    if profile_result is not None:
         results.append(profile_result)
-        if profile_result.status == "OK":
-            profile = load_profile(profile_path)
+        if profile is not None:
             results.append(warn_score_threshold(profile))
             results.append(warn_empty_targeting(profile))
             results.append(warn_unknown_skills(profile))

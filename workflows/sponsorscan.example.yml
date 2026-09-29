@@ -42,6 +42,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # Citizens and permanent residents need no sponsorship, so their reports
+      # ignore LCA data and the three LCA steps below are skipped.
+      - name: Check whether the profile needs LCA data
+        id: profile
+        run: |
+          python -c "from profile_loader import load_profile, needs_sponsorship; print('lca=' + str(needs_sponsorship(load_profile('$PROFILE_PATH'))).lower())" >> "$GITHUB_OUTPUT"
+
       # The LCA data changes quarterly, so the cache is keyed by month: the first
       # run of each month tries a refresh, and the rest reuse it. The older
       # sponsorscan-db- prefix is kept so an existing cache carries over.
@@ -51,6 +58,7 @@ jobs:
 
       - name: Restore SponsorScan database cache
         id: db-cache
+        if: steps.profile.outputs.lca == 'true'
         uses: actions/cache/restore@v4
         with:
           path: sponsorscan.db
@@ -61,7 +69,7 @@ jobs:
 
       - name: Load LCA data
         id: load-lca
-        if: steps.db-cache.outputs.cache-hit != 'true'
+        if: steps.profile.outputs.lca == 'true' && steps.db-cache.outputs.cache-hit != 'true'
         # --latest resolves the newest disclosure file from the DOL site. The
         # DOL site blocks some networks, GitHub's runners included, so when it
         # fails the step falls back to LCA_FILE_URL (a repository variable

@@ -6,6 +6,14 @@ The citizen profile keeps roles that require U.S. citizenship or permanent work
 authorization, while still applying entry-level, resume, degree, and seniority
 filters.
 
+**You do not need the DOL LCA data.** Sponsorship history says nothing about
+whether a job suits a citizen, so a profile with `work_authorization` set to
+`us_citizen` or `permanent_resident` ignores it. Skip `load-lca` entirely. Every
+job gets the same flat sponsorship score, so an employer that has never filed an
+LCA ranks the same as one that files thousands, and the `minimum_score` and
+priority labels mean the same as for any other profile. If LCA data happens to be
+loaded, `lca_certified` still shows each employer's filing count as information.
+
 ## 1. Copy the example profile
 
 From the repository root:
@@ -179,7 +187,8 @@ file across multiple users.
 
 ## 8. Run the profile locally
 
-After fetching current jobs:
+Fetch current jobs. This also creates the database; there is no `load-lca`
+step for a citizen profile:
 
 ```powershell
 python sponsorscan.py fetch-jobs --replace
@@ -235,6 +244,9 @@ See:
 docs/EMAIL_SETUP.md
 docs/GOOGLE_SHEETS_SETUP.md
 ```
+
+The example workflow reads the profile and skips its LCA steps for a citizen,
+so there is nothing to download and no `LCA_FILE_URL` to set.
 
 Each automated user should have:
 

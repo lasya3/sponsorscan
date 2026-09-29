@@ -9,6 +9,7 @@ from profile_loader import (
     ProfileError,
     describe_profile,
     load_profile,
+    needs_sponsorship,
     validate_profile,
 )
 
@@ -92,3 +93,14 @@ def test_shipped_example_profiles_are_valid():
     for example in examples:
         profile = load_profile(example)
         assert describe_profile(profile)
+
+
+@pytest.mark.parametrize("auth, needs", [
+    ("us_citizen", False), ("permanent_resident", False),
+    ("opt", True), ("stem_opt", True), ("other", True)])
+def test_needs_sponsorship_follows_work_authorization(auth, needs):
+    assert needs_sponsorship({"work_authorization": auth}) is needs
+
+
+def test_no_profile_assumes_sponsorship_is_needed():
+    assert needs_sponsorship(None) is True

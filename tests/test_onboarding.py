@@ -65,6 +65,12 @@ def test_lca_check_fails_when_no_employers_loaded(con):
     assert "load-lca" in result.remedy
 
 
+def test_lca_check_is_not_needed_for_a_citizen(con):
+    result = check_lca_loaded(con, {"work_authorization": "us_citizen"})
+    assert result.status == "OK"
+    assert "not needed" in result.message.lower()
+
+
 def test_lca_check_passes_and_reports_the_employer_count(con):
     con.executemany(
         "INSERT INTO employers (employer_norm, certified) VALUES (?, ?)",
@@ -329,6 +335,21 @@ def test_run_checks_passes_on_a_complete_setup(tmp_path):
     results = run_checks(db_path=db, companies_path=companies,
                          profile_path=profile, env={}, today=date(2026, 9, 23))
     assert exit_code(results) == 0
+
+
+def test_run_checks_passes_for_a_citizen_with_no_lca_data(tmp_path):
+    db = build_db(tmp_path, employers=0, jobs=5)
+    companies = tmp_path / "companies.yaml"
+    companies.write_text(
+        "companies:\n  greenhouse:\n    - {slug: stripe, name: Stripe}\n",
+        encoding="utf-8")
+    profile = write_profile(tmp_path, {"profile_id": "casey",
+                                       "work_authorization": "us_citizen",
+                                       "reject_citizenship_required": False,
+                                       "target_roles": ["Software Engineer"]})
+    results = run_checks(db_path=db, companies_path=companies,
+                         profile_path=profile, env={}, today=date(2026, 9, 23))
+    assert exit_code(results) == 0, format_results(results)
 
 
 def test_run_checks_without_a_profile_skips_profile_checks(tmp_path):
@@ -914,3 +935,9 @@ def test_setup_subcommand_prints_the_skill_notice(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     # the notice itself, not the prompt hint that also contains "literally"
     assert "has no built-in pattern" in result.stdout
+
+
+def test_missing_database_points_a_citizen_at_fetch_jobs(tmp_path):
+    result = check_database(tmp_path / "absent.db", {"work_authorization": "us_citizen"})
+    assert result.status == "FAIL"
+    assert "fetch-jobs" in result.remedy

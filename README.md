@@ -84,6 +84,9 @@ SponsorScan reads the quarterly **LCA Programs (H-1B, H-1B1, E-3)** disclosure
 file published by the DOL. It is an `.xlsx` file, typically 100-400 MB, and the
 filename changes each quarter.
 
+U.S. citizens and permanent residents can skip this step. Their reports ignore
+sponsorship history; see [docs/CITIZEN_SETUP.md](docs/CITIZEN_SETUP.md).
+
 ```powershell
 python sponsorscan.py load-lca --latest --replace
 ```

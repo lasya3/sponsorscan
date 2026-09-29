@@ -202,6 +202,17 @@ def validate_profile(profile: dict[str, Any]) -> None:
             )
 
 
+# Authorizations that never need an employer to sponsor a visa. For these,
+# LCA filing history says nothing about whether a job is worth applying to.
+NO_SPONSORSHIP_NEEDED = {"us_citizen", "permanent_resident"}
+
+
+def needs_sponsorship(profile: dict[str, Any] | None) -> bool:
+    """False for citizens and permanent residents; True otherwise, and with
+    no profile, since the tool's default audience needs sponsorship."""
+    return (profile or {}).get("work_authorization") not in NO_SPONSORSHIP_NEEDED
+
+
 def load_profile(path: str | Path) -> dict[str, Any]:
     """
     Load, merge, and validate a SponsorScan profile JSON file.
