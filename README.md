@@ -2,6 +2,11 @@
   <img src="assets/banner.svg" alt="sponsorscan" width="100%">
 </p>
 
+<p align="center">
+  <img src="assets/job-boards.gif"
+       alt="Live postings from Greenhouse, Lever, Ashby and Workday" width="560">
+</p>
+
 Finds entry-level postings at employers with real H-1B filing history, and drops
 the ones that disqualify you outright.
 
