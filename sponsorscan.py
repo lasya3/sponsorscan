@@ -408,7 +408,85 @@ def fetch_ashby(slug):
     return out
 
 
-FETCHERS = {"greenhouse": fetch_greenhouse, "lever": fetch_lever, "ashby": fetch_ashby}
+# Workday hosts most large employers, which are most of the DOL filers. Its list
+# endpoint gives titles and a relative "Posted 3 Days Ago", but no description,
+# and the report needs the description for its disqualifier checks. So the list
+# is paged in full (cheap) and details are fetched only for recent postings.
+WORKDAY_MAX_AGE_DAYS = 3
+WORKDAY_PAGE = 20          # the API rejects anything larger
+WORKDAY_DETAIL_DELAY = 0.1
+_WORKDAY_AGE = re.compile(r"posted\s+(today|yesterday|(\d+)\+?\s+days?\s+ago)", re.I)
+
+
+def workday_age_days(posted_on):
+    """Days since posting from Workday's "Posted N Days Ago" text, or None."""
+    m = _WORKDAY_AGE.search(posted_on or "")
+    if not m:
+        return None
+    word = m.group(1).lower()
+    if word == "today":
+        return 0
+    if word == "yesterday":
+        return 1
+    return int(m.group(2))
+
+
+def fetch_workday(slug, max_age_days=WORKDAY_MAX_AGE_DAYS):
+    """slug is 'tenant/wdN/site', e.g. 'adobe/wd5/external_experienced'."""
+    parts = slug.split("/")
+    if len(parts) != 3:
+        raise ValueError(f"workday slug must be tenant/wdN/site, got '{slug}'")
+    tenant, wd, site = parts
+    api = f"https://{tenant}.{wd}.myworkdayjobs.com/wday/cxs/{tenant}/{site}"
+    headers = {**UA, "Accept": "application/json"}
+
+    listed, offset = [], 0
+    while True:
+        r = requests.post(f"{api}/jobs", headers=headers, timeout=25, json={
+            "appliedFacets": {}, "limit": WORKDAY_PAGE, "offset": offset,
+            "searchText": ""})
+        r.raise_for_status()
+        page = r.json().get("jobPostings") or []
+        listed.extend(page)
+        if len(page) < WORKDAY_PAGE:
+            break
+        offset += WORKDAY_PAGE
+
+    out, last_error, attempted = [], None, 0
+    for j in listed:
+        age = workday_age_days(j.get("postedOn"))
+        if age is not None and age > max_age_days:
+            continue
+        attempted += 1
+        try:
+            info = _get_json(f"{api}{j.get('externalPath', '')}").get("jobPostingInfo") or {}
+        except (requests.RequestException, ValueError) as exc:
+            last_error = exc
+            continue
+        finally:
+            time.sleep(WORKDAY_DETAIL_DELAY)
+        places = [info.get("location") or ""] + list(info.get("additionalLocations") or [])
+        location = "; ".join(p for p in places if p)
+        country = (info.get("country") or {}).get("descriptor")
+        if country:
+            location = f"{location}, {country}" if location else country
+        out.append({
+            "job_key": f"workday:{slug}:{info.get('jobReqId') or j.get('externalPath')}",
+            "source": "workday", "title": info.get("title") or j.get("title", ""),
+            "location": location, "url": info.get("externalUrl", ""),
+            "posted": (info.get("startDate") or "")[:10],
+            "description": html_to_text(info.get("jobDescription", "")),
+        })
+
+    # One bad detail is skipped; all of them failing means the board is down,
+    # and fetch-jobs must record that rather than an empty board.
+    if attempted and not out:
+        raise last_error
+    return out
+
+
+FETCHERS = {"greenhouse": fetch_greenhouse, "lever": fetch_lever, "ashby": fetch_ashby,
+            "workday": fetch_workday}
 
 
 def cmd_fetch_jobs(args):
@@ -433,7 +511,10 @@ def cmd_fetch_jobs(args):
             else:
                 slug, display = entry, entry
             try:
-                jobs = fetcher(slug)
+                if provider == "workday":
+                    jobs = fetcher(slug, max_age_days=args.workday_days)
+                else:
+                    jobs = fetcher(slug)
             except Exception as exc:
                 failed.append(f"{provider}/{slug}: {exc}")
                 continue
@@ -656,9 +737,12 @@ def cmd_discover(args):
         with open(args.out, encoding="utf-8") as fh:
             existing = (yaml.safe_load(fh) or {}).get("companies") or {}
 
-    merged = {p: list(existing.get(p) or []) for p in PROBE_URLS}
+    # Providers discover cannot probe, such as Workday, are carried over as-is.
+    merged = {p: list(v or []) for p, v in existing.items()}
+    for p in PROBE_URLS:
+        merged.setdefault(p, [])
     seen = {p: {(e.get("slug") if isinstance(e, dict) else e) for e in merged[p]}
-            for p in PROBE_URLS}
+            for p in merged}
     added = 0
     for display, (provider, slug, n, certified) in sorted(
             by_display.items(), key=lambda kv: -kv[1][3]):
@@ -676,7 +760,7 @@ def cmd_discover(args):
                  "# probe, so a listed board definitely exists. It is still possible for\n"
                  "# a guess to land on a DIFFERENT company with a similar name. If a\n"
                  "# company's postings look wrong, delete its line.\n\n")
-        yaml.safe_dump({"companies": {p: merged[p] for p in PROBE_URLS if merged[p]}},
+        yaml.safe_dump({"companies": {p: v for p, v in merged.items() if v}},
                        fh, sort_keys=False, default_flow_style=False)
 
     con.close()
@@ -914,6 +998,9 @@ def main():
     b.add_argument("--companies", default="companies.yaml")
     b.add_argument("--replace", action="store_true")
     b.add_argument("--delay", type=float, default=0.4, help="Seconds between boards")
+    b.add_argument("--workday-days", type=int, default=WORKDAY_MAX_AGE_DAYS,
+                   help="Fetch Workday postings up to this many days old "
+                        f"(default {WORKDAY_MAX_AGE_DAYS})")
     b.set_defaults(func=cmd_fetch_jobs)
 
     d = sub.add_parser("discover", help="Build companies.yaml from the DOL employer list")

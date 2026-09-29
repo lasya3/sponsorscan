@@ -3,6 +3,8 @@
 The end-to-end load/report/discover flow is covered by selftest.py.
 """
 
+import json
+
 import pytest
 import requests
 
@@ -163,9 +165,115 @@ def test_fetch_records_boards_that_answered(monkeypatch, tmp_path):
         "  greenhouse:\n    - {slug: stripe, name: Stripe}\n"
         "  lever:\n    - {slug: plaid, name: Plaid}\n", encoding="utf-8")
 
-    ss.cmd_fetch_jobs(argparse.Namespace(companies=str(companies), replace=True, delay=0))
+    ss.cmd_fetch_jobs(argparse.Namespace(companies=str(companies), replace=True, delay=0,
+                                          workday_days=3))
 
     con = sqlite3.connect(tmp_path / "t.db")
     fetched = {r[0] for r in con.execute("SELECT company_norm FROM fetched_companies")}
     con.close()
     assert fetched == {"stripe"}, "a board that failed must not count as tracked"
+
+
+# ---------------------------------------------------------------- workday
+
+@pytest.mark.parametrize("text, days", [
+    ("Posted Today", 0), ("Posted Yesterday", 1), ("Posted 5 Days Ago", 5),
+    ("Posted 30+ Days Ago", 30), ("", None), ("Recently", None)])
+def test_workday_posted_age(text, days):
+    assert ss.workday_age_days(text) == days
+
+
+class _FakeWorkday:
+    """A tenant with 25 listed jobs, served 20 per page like the real API."""
+
+    def __init__(self, ages, broken=()):
+        self.ages = ages
+        self.broken = set(broken)
+        self.detail_calls = []
+
+    def _response(self, payload, status=200):
+        r = requests.Response()
+        r.status_code = status
+        r._content = json.dumps(payload).encode()
+        return r
+
+    def post(self, url, json=None, **kwargs):
+        start = json["offset"]
+        page = [{"title": f"Engineer {i}", "externalPath": f"/job/Place/Engineer_R{i}",
+                 "postedOn": text}
+                for i, text in list(enumerate(self.ages))[start:start + json["limit"]]]
+        return self._response({"total": len(self.ages), "jobPostings": page})
+
+    def get(self, url, **kwargs):
+        i = int(url.rsplit("_R", 1)[1])
+        self.detail_calls.append(i)
+        if i in self.broken:
+            return self._response({}, status=500)
+        return self._response({"jobPostingInfo": {
+            "title": f"Engineer {i}", "jobReqId": f"R{i}",
+            "jobDescription": "<p>Build <b>things</b>.</p>",
+            "location": "San Jose", "additionalLocations": ["Austin"],
+            "country": {"descriptor": "United States of America"},
+            "startDate": "2026-09-27",
+            "externalUrl": f"https://acme.wd5.myworkdayjobs.com/Ext/job/Place/Engineer_R{i}",
+        }})
+
+
+def _install(monkeypatch, fake):
+    monkeypatch.setattr(requests, "post", fake.post)
+    monkeypatch.setattr(requests, "get", fake.get)
+    monkeypatch.setattr(ss, "WORKDAY_DETAIL_DELAY", 0)
+
+
+def test_workday_fetches_details_only_for_recent_jobs(monkeypatch):
+    ages = ["Posted Today"] * 3 + ["Posted 10 Days Ago"] * 20 + ["Posted Yesterday"] * 2
+    fake = _FakeWorkday(ages)
+    _install(monkeypatch, fake)
+
+    jobs = ss.fetch_workday("acme/wd5/Ext", max_age_days=3)
+
+    assert sorted(fake.detail_calls) == [0, 1, 2, 23, 24], "paged past page one"
+    job = next(j for j in jobs if j["job_key"] == "workday:acme/wd5/Ext:R0")
+    assert job["source"] == "workday"
+    assert job["posted"] == "2026-09-27"
+    assert job["description"].startswith("Build things")
+    assert job["url"].endswith("/Engineer_R0")
+    assert job["location"] == "San Jose; Austin, United States of America"
+
+
+def test_workday_skips_a_job_whose_detail_fails(monkeypatch):
+    fake = _FakeWorkday(["Posted Today"] * 3, broken={1})
+    _install(monkeypatch, fake)
+    keys = {j["job_key"] for j in ss.fetch_workday("acme/wd5/Ext", max_age_days=3)}
+    assert keys == {"workday:acme/wd5/Ext:R0", "workday:acme/wd5/Ext:R2"}
+
+
+def test_workday_board_fails_when_every_detail_fails(monkeypatch):
+    fake = _FakeWorkday(["Posted Today"] * 2, broken={0, 1})
+    _install(monkeypatch, fake)
+    with pytest.raises(requests.HTTPError):
+        ss.fetch_workday("acme/wd5/Ext", max_age_days=3)
+
+
+def test_workday_slug_must_have_three_parts():
+    with pytest.raises(ValueError, match="tenant/wdN/site"):
+        ss.fetch_workday("adobe", max_age_days=3)
+
+
+def test_fetch_passes_the_workday_window(monkeypatch, tmp_path):
+    import argparse
+    seen = {}
+
+    def fake_workday(slug, max_age_days):
+        seen[slug] = max_age_days
+        return []
+
+    monkeypatch.setattr(ss, "DB_PATH", str(tmp_path / "t.db"))
+    monkeypatch.setattr(ss, "FETCHERS", {"workday": fake_workday})
+    companies = tmp_path / "companies.yaml"
+    companies.write_text("companies:\n  workday:\n"
+                         "    - {slug: adobe/wd5/ext, name: Adobe}\n", encoding="utf-8")
+
+    ss.cmd_fetch_jobs(argparse.Namespace(
+        companies=str(companies), replace=True, delay=0, workday_days=7))
+    assert seen == {"adobe/wd5/ext": 7}

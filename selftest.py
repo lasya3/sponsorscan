@@ -174,6 +174,16 @@ ss.cmd_discover(A())
 assert open("test_companies.yaml").read() == before, "re-run should be idempotent"
 print("PASS  discover is idempotent and caches probe results")
 
+# discover cannot probe Workday, so hand-added entries must survive a re-run
+got["workday"] = [{"slug": "adobe/wd5/external_experienced", "name": "Adobe"}]
+with open("test_companies.yaml", "w") as fh:
+    _yaml.safe_dump({"companies": got}, fh)
+ss.cmd_discover(A())
+with open("test_companies.yaml") as fh:
+    kept = _yaml.safe_load(fh)["companies"].get("workday") or []
+assert [e["slug"] for e in kept] == ["adobe/wd5/external_experienced"], kept
+print("PASS  discover keeps providers it cannot probe")
+
 for f in ("test.db", "test_lca.csv", "test_out.csv", "test_companies.yaml"):
     if os.path.exists(f):
         os.remove(f)
