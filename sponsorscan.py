@@ -821,6 +821,19 @@ ENTRY_TITLE = re.compile(
     r"\b(intern|internship|new ?grad|new graduate|university grad|recent grad|"
     r"early career|entry.level|junior|jr\.?|associate|apprentice|i{1,2}\b)\b", re.I)
 
+# Wording that marks a posting as early career even when the title also has a
+# senior word, as in "Program Manager Intern". Stricter than ENTRY_TITLE, which
+# includes "associate" and a bare "II" and would let "Senior Associate" through.
+EARLY_CAREER_TITLE = re.compile(
+    r"\b(intern|internship|new ?grad|new graduate|university grad|recent grad|"
+    r"early career|entry.level|apprentice(?:ship)?)\b", re.I)
+
+
+def is_senior_title(title):
+    title = title or ""
+    return bool(SENIOR_TITLE.search(title)) and not EARLY_CAREER_TITLE.search(title)
+
+
 DISQ_RE = [re.compile(p, re.I) for p in DISQUALIFIERS]
 POS_RE = [re.compile(p, re.I) for p in SPONSOR_POSITIVE]
 
@@ -880,7 +893,7 @@ def cmd_report(args):
             dropped += 1
             continue
 
-        if not args.include_senior and SENIOR_TITLE.search(title or ""):
+        if not args.include_senior and is_senior_title(title):
             continue
 
         score, why = 0, []

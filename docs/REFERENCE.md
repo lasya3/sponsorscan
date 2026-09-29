@@ -132,7 +132,7 @@ The report defaults to locations anywhere in the United States. Pass
 | `--locations "san francisco,santa clara,remote"` | Match comma-separated location substrings |
 | `--any-location` | Keep postings that miss the location filter instead of dropping them |
 | `--sponsors-only` | Drop employers with no certified LCAs on record |
-| `--include-senior` | Stop filtering Senior, Staff, Principal, and Director titles |
+| `--include-senior` | Stop filtering Senior, Staff, Principal, and Director titles. Titles that also say intern, new grad, early career, entry level or apprentice are kept either way |
 | `--top 40` | Control how many rows print in the terminal; the CSV still contains every match |
 
 The generated CSV is written in the current folder. It can be opened directly in

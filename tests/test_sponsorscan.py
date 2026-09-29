@@ -311,3 +311,15 @@ def test_workday_board_fails_when_a_list_page_fails(monkeypatch):
     _install(monkeypatch, fake)
     with pytest.raises(requests.HTTPError):
         ss.fetch_workday("acme/wd5/Ext", max_age_days=3)
+
+
+# --------------------------------------------------------- senior titles
+
+@pytest.mark.parametrize("title, senior", [
+    ("Senior Software Engineer", True),
+    ("Senior Associate", True),
+    ("Program Manager Intern", False),
+    ("Software Engineer", False),
+])
+def test_is_senior_title(title, senior):
+    assert ss.is_senior_title(title) is senior
