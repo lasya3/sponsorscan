@@ -110,6 +110,11 @@ CREATE TABLE IF NOT EXISTS fetched_companies (
     company_norm TEXT PRIMARY KEY,
     fetched_at   TEXT
 );
+CREATE TABLE IF NOT EXISTS fetch_failures (
+    board     TEXT PRIMARY KEY,
+    error     TEXT,
+    failed_at TEXT
+);
 CREATE TABLE IF NOT EXISTS probe_cache (
     provider   TEXT,
     slug       TEXT,
@@ -515,6 +520,7 @@ def cmd_fetch_jobs(args):
     if args.replace:
         con.execute("DELETE FROM jobs")
         con.execute("DELETE FROM fetched_companies")
+        con.execute("DELETE FROM fetch_failures")
 
     total, failed = 0, []
     for provider, entries in (cfg.get("companies") or {}).items():
@@ -535,6 +541,11 @@ def cmd_fetch_jobs(args):
                     jobs = fetcher(slug)
             except Exception as exc:
                 failed.append(f"{provider}/{slug}: {exc}")
+                # Read by the notification email, so a dead board is noticed.
+                con.execute("INSERT OR REPLACE INTO fetch_failures VALUES (?, ?, ?)",
+                            (f"{provider}/{slug}", str(exc)[:200],
+                             time.strftime("%Y-%m-%d %H:%M")))
+                con.commit()
                 continue
             rows = [(
                 j["job_key"], j["source"], display, norm_employer(display),
@@ -548,6 +559,8 @@ def cmd_fetch_jobs(args):
             # The report baselines employers it has not tracked before. A board
             # that answered with no postings is tracked all the same, so its
             # first real opening is reported rather than silenced.
+            con.execute("DELETE FROM fetch_failures WHERE board = ?",
+                        (f"{provider}/{slug}",))
             con.execute(
                 "INSERT OR REPLACE INTO fetched_companies VALUES (?, ?)",
                 (norm_employer(display), time.strftime("%Y-%m-%d %H:%M")))

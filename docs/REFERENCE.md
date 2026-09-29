@@ -389,6 +389,12 @@ from environment variables or GitHub Actions secrets.
 the Google Sheets service-account address. `GMAIL_APP_PASSWORD` must belong to
 the same Gmail account.
 
+When the last `fetch-jobs` run could not read a board, the email ends with a
+list of those boards and their errors. A board that fails run after run usually
+has a wrong slug in `companies.yaml`. The list only rides along on an email that
+is already going out, so a broken board never sends mail on its own. The script
+reads failures from `sponsorscan.db`, or from `SPONSORSCAN_DB` when that is set.
+
 A workflow step can call the sender after the Google Sheets update:
 
 ```yaml

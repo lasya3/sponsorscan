@@ -38,6 +38,11 @@ SMTP_HOST
 SMTP_PORT
     SMTP server port.
     Default: 465
+
+SPONSORSCAN_DB
+    Database written by fetch-jobs. Boards that failed to fetch are listed at
+    the end of the message.
+    Default: sponsorscan.db
 """
 
 from __future__ import annotations
@@ -46,6 +51,7 @@ import csv
 import mimetypes
 import os
 import smtplib
+import sqlite3
 import ssl
 import sys
 from email.message import EmailMessage
@@ -54,6 +60,7 @@ from typing import Iterable
 
 
 DEFAULT_CSV = "new_jobs_48h.csv"
+DEFAULT_DB = "sponsorscan.db"
 DEFAULT_SMTP_HOST = "smtp.gmail.com"
 DEFAULT_SMTP_PORT = 465
 MAX_INLINE_JOBS = 20
@@ -91,6 +98,20 @@ def load_rows(path: Path) -> list[dict[str, str]]:
             for row in reader
             if any((value or "").strip() for value in row.values())
         ]
+
+
+def load_failures(db_path: Path) -> list[tuple[str, str]]:
+    """Boards the last fetch-jobs run could not read, as (board, error)."""
+    if not db_path.exists():
+        return []
+    con = sqlite3.connect(db_path)
+    try:
+        return [tuple(row) for row in con.execute(
+            "SELECT board, error FROM fetch_failures ORDER BY board")]
+    except sqlite3.OperationalError:
+        return []  # a database from before failures were recorded
+    finally:
+        con.close()
 
 
 def first_present(row: dict[str, str], names: Iterable[str]) -> str:
@@ -136,6 +157,7 @@ def build_plain_text(
     rows: list[dict[str, str]],
     profile_name: str,
     report_hours: str,
+    failures: Iterable[tuple[str, str]] = (),
 ) -> str:
     count = len(rows)
 
@@ -159,6 +181,16 @@ def build_plain_text(
         )
         lines.append("")
 
+    failures = list(failures)
+    if failures:
+        lines.append(
+            f"{len(failures)} job board{'s' if len(failures) != 1 else ''} "
+            "failed to fetch, so their postings are missing. "
+            "A persistent failure usually means a wrong slug in companies.yaml:"
+        )
+        lines.extend(f"  - {board}: {error}" for board, error in failures)
+        lines.append("")
+
     lines.extend(
         [
             "Review each original posting before applying.",
@@ -174,6 +206,7 @@ def build_html(
     rows: list[dict[str, str]],
     profile_name: str,
     report_hours: str,
+    failures: Iterable[tuple[str, str]] = (),
 ) -> str:
     import html
 
@@ -220,6 +253,20 @@ def build_html(
             + "</li>"
         )
 
+    failures = list(failures)
+    failed = ""
+    if failures:
+        failed_items = "".join(
+            f"<li>{html.escape(board)}: {html.escape(error)}</li>"
+            for board, error in failures
+        )
+        failed = (
+            f"<p>{len(failures)} job board{'s' if len(failures) != 1 else ''} "
+            "failed to fetch, so their postings are missing. A persistent "
+            "failure usually means a wrong slug in companies.yaml:</p>"
+            f"<ul>{failed_items}</ul>"
+        )
+
     remaining = len(rows) - MAX_INLINE_JOBS
     extra = (
         f"<p>{remaining} additional match"
@@ -243,6 +290,7 @@ def build_html(
       {''.join(items)}
     </ol>
     {extra}
+    {failed}
     <p>Review each original posting before applying.</p>
     <p><small>This message was generated automatically by SponsorScan.</small></p>
   </body>
@@ -331,8 +379,10 @@ def main() -> int:
             f"match{'es' if count != 1 else ''}"
         )
 
-        plain_text = build_plain_text(rows, profile_name, report_hours)
-        html_text = build_html(rows, profile_name, report_hours)
+        failures = load_failures(
+            Path(os.getenv("SPONSORSCAN_DB", DEFAULT_DB)).expanduser())
+        plain_text = build_plain_text(rows, profile_name, report_hours, failures)
+        html_text = build_html(rows, profile_name, report_hours, failures)
 
         send_email(
             sender=sender,

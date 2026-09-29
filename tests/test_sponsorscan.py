@@ -346,3 +346,25 @@ def test_greenhouse_posted_is_first_publication(monkeypatch):
 def test_greenhouse_falls_back_to_updated_at(monkeypatch):
     job = _greenhouse(monkeypatch, {"updated_at": "2026-09-21T13:22:12-04:00"})
     assert job["posted"] == "2026-09-21"
+
+
+def test_fetch_records_failed_boards(monkeypatch, tmp_path):
+    import argparse
+    import sqlite3
+
+    def dead_board(slug):
+        raise requests.ConnectionError("connection refused")
+
+    monkeypatch.setattr(ss, "DB_PATH", str(tmp_path / "t.db"))
+    monkeypatch.setattr(ss, "FETCHERS", {"lever": dead_board})
+    companies = tmp_path / "companies.yaml"
+    companies.write_text("companies:\n  lever:\n    - {slug: plaid, name: Plaid}\n",
+                         encoding="utf-8")
+
+    ss.cmd_fetch_jobs(argparse.Namespace(
+        companies=str(companies), replace=True, delay=0, workday_days=2))
+
+    con = sqlite3.connect(tmp_path / "t.db")
+    rows = con.execute("SELECT board, error FROM fetch_failures").fetchall()
+    con.close()
+    assert rows == [("lever/plaid", "connection refused")]
