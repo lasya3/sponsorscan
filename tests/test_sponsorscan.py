@@ -323,3 +323,26 @@ def test_workday_board_fails_when_a_list_page_fails(monkeypatch):
 ])
 def test_is_senior_title(title, senior):
     assert ss.is_senior_title(title) is senior
+
+
+# ------------------------------------------------------------- greenhouse
+
+def _greenhouse(monkeypatch, job):
+    r = requests.Response()
+    r.status_code = 200
+    r._content = json.dumps({"jobs": [{"id": 1, "title": "Engineer", **job}]}).encode()
+    monkeypatch.setattr(requests, "get", lambda *a, **k: r)
+    return ss.fetch_greenhouse("acme")[0]
+
+
+def test_greenhouse_posted_is_first_publication(monkeypatch):
+    """Employers bulk-touch their boards, which bumps updated_at on every job;
+    a 2023 posting would otherwise read as posted this week."""
+    job = _greenhouse(monkeypatch, {"first_published": "2023-12-12T05:19:55-05:00",
+                                    "updated_at": "2026-09-21T13:22:12-04:00"})
+    assert job["posted"] == "2023-12-12"
+
+
+def test_greenhouse_falls_back_to_updated_at(monkeypatch):
+    job = _greenhouse(monkeypatch, {"updated_at": "2026-09-21T13:22:12-04:00"})
+    assert job["posted"] == "2026-09-21"

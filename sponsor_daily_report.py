@@ -844,8 +844,8 @@ def parse_posted_datetime(value):
             return None
 
     # Date-only values are handled before the ISO parser, which would read
-    # them as midnight. Greenhouse and Ashby both supply `updated_at` truncated
-    # to 10 characters, so treating those as midnight backdates the posting by
+    # them as midnight. Greenhouse and Ashby dates are stored truncated to 10
+    # characters, so treating those as midnight backdates the posting by
     # up to a day and drops it from the window early. There is no posting time
     # in the data, so assume the end of that UTC day.
     for fmt in ("%Y-%m-%d", "%m/%d/%Y"):

@@ -366,7 +366,9 @@ def fetch_greenhouse(slug):
             "job_key": f"greenhouse:{slug}:{j.get('id')}",
             "source": "greenhouse", "title": j.get("title", ""),
             "location": loc, "url": j.get("absolute_url", ""),
-            "posted": (j.get("updated_at") or "")[:10],
+            # updated_at moves whenever the employer bulk-edits its board, so
+            # a years-old posting would read as new. first_published does not.
+            "posted": (j.get("first_published") or j.get("updated_at") or "")[:10],
             "description": html_to_text(j.get("content", "")),
         })
     return out
