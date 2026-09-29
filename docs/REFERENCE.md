@@ -78,9 +78,11 @@ run resumes from the cache.
 | `--max-certified 2000` | Skip employers above the specified number of certified LCAs; 0 removes the cap |
 | `--no-merge` | Overwrite `companies.yaml` instead of adding to it |
 
-Only three major ATS providers are currently covered. Workday, Taleo, iCIMS, and
-SmartRecruiters are not, which is why some large enterprises, universities, and
-hospitals will be missing.
+`discover` probes Greenhouse, Lever and Ashby. Workday boards are supported by
+`fetch-jobs` but cannot be guessed from an employer name, so add them to
+`companies.yaml` by hand; `discover` keeps them when it rewrites the file. Taleo,
+iCIMS and SmartRecruiters are not covered, which is why some large enterprises,
+universities and hospitals will be missing.
 
 ## 3. Pull live postings
 
@@ -93,6 +95,28 @@ stores them in `sponsorscan.db`.
 
 Use `--replace` when you want the jobs table to represent the latest full fetch.
 Run the same command again whenever you want refreshed postings.
+
+### Workday boards
+
+A Workday slug is `tenant/wdN/site`, read from the careers page URL:
+`adobe.wd5.myworkdayjobs.com/external_experienced` becomes
+`adobe/wd5/external_experienced`.
+
+```yaml
+companies:
+  workday:
+    - {slug: adobe/wd5/external_experienced, name: Adobe}
+```
+
+Workday's job list has no descriptions, and the report needs them to check for
+citizenship, degree and experience requirements. So `fetch-jobs` reads the whole
+list but opens only postings from the last two days, one request each. Large
+employers list thousands of jobs, so a Workday fetch takes minutes rather than
+seconds.
+
+| Flag | Effect |
+|---|---|
+| `--workday-days 5` | Open Workday postings up to 5 days old. Raise it when running the report with `--hours` above 48, or older postings will be missing |
 
 ## 4. Generate the standard report
 
@@ -108,7 +132,7 @@ The report defaults to locations anywhere in the United States. Pass
 | `--locations "san francisco,santa clara,remote"` | Match comma-separated location substrings |
 | `--any-location` | Keep postings that miss the location filter instead of dropping them |
 | `--sponsors-only` | Drop employers with no certified LCAs on record |
-| `--include-senior` | Stop filtering Senior, Staff, Principal, and Director titles |
+| `--include-senior` | Stop filtering Senior, Staff, Principal, and Director titles. Titles that also say intern, new grad, early career, entry level or apprentice are kept either way |
 | `--top 40` | Control how many rows print in the terminal; the CSV still contains every match |
 
 The generated CSV is written in the current folder. It can be opened directly in
@@ -364,6 +388,12 @@ from environment variables or GitHub Actions secrets.
 `GMAIL_ADDRESS` must be a real Gmail account used to send the message. It is not
 the Google Sheets service-account address. `GMAIL_APP_PASSWORD` must belong to
 the same Gmail account.
+
+When the last `fetch-jobs` run could not read a board, the email ends with a
+list of those boards and their errors. A board that fails run after run usually
+has a wrong slug in `companies.yaml`. The list only rides along on an email that
+is already going out, so a broken board never sends mail on its own. The script
+reads failures from `sponsorscan.db`, or from `SPONSORSCAN_DB` when that is set.
 
 A workflow step can call the sender after the Google Sheets update:
 

@@ -3,6 +3,8 @@
 The end-to-end load/report/discover flow is covered by selftest.py.
 """
 
+import json
+
 import pytest
 import requests
 
@@ -163,9 +165,206 @@ def test_fetch_records_boards_that_answered(monkeypatch, tmp_path):
         "  greenhouse:\n    - {slug: stripe, name: Stripe}\n"
         "  lever:\n    - {slug: plaid, name: Plaid}\n", encoding="utf-8")
 
-    ss.cmd_fetch_jobs(argparse.Namespace(companies=str(companies), replace=True, delay=0))
+    ss.cmd_fetch_jobs(argparse.Namespace(companies=str(companies), replace=True, delay=0,
+                                          workday_days=3))
 
     con = sqlite3.connect(tmp_path / "t.db")
     fetched = {r[0] for r in con.execute("SELECT company_norm FROM fetched_companies")}
     con.close()
     assert fetched == {"stripe"}, "a board that failed must not count as tracked"
+
+
+# ---------------------------------------------------------------- workday
+
+@pytest.mark.parametrize("text, days", [
+    ("Posted Today", 0), ("Posted Yesterday", 1), ("Posted 5 Days Ago", 5),
+    ("Posted 30+ Days Ago", 30), ("", None), ("Recently", None)])
+def test_workday_posted_age(text, days):
+    assert ss.workday_age_days(text) == days
+
+
+class _FakeWorkday:
+    """A tenant with 25 listed jobs, served 20 per page like the real API."""
+
+    def __init__(self, ages, broken=()):
+        self.ages = ages
+        self.broken = set(broken)
+        self.detail_calls = []
+
+    def _response(self, payload, status=200):
+        r = requests.Response()
+        r.status_code = status
+        r._content = json.dumps(payload).encode()
+        return r
+
+    def post(self, url, json=None, **kwargs):
+        start = json["offset"]
+        page = [{"title": f"Engineer {i}", "externalPath": f"/job/Place/Engineer_R{i}",
+                 "postedOn": text}
+                for i, text in list(enumerate(self.ages))[start:start + json["limit"]]]
+        return self._response({"total": len(self.ages), "jobPostings": page})
+
+    def get(self, url, **kwargs):
+        i = int(url.rsplit("_R", 1)[1])
+        self.detail_calls.append(i)
+        if i in self.broken:
+            return self._response({}, status=500)
+        return self._response({"jobPostingInfo": {
+            "title": f"Engineer {i}", "jobReqId": f"R{i}",
+            "jobDescription": "<p>Build <b>things</b>.</p>",
+            "location": "San Jose", "additionalLocations": ["Austin"],
+            "country": {"descriptor": "United States of America"},
+            "startDate": "2026-09-27",
+            "externalUrl": f"https://acme.wd5.myworkdayjobs.com/Ext/job/Place/Engineer_R{i}",
+        }})
+
+
+def _install(monkeypatch, fake):
+    monkeypatch.setattr(requests, "post", fake.post)
+    monkeypatch.setattr(requests, "get", fake.get)
+    monkeypatch.setattr(ss, "WORKDAY_DETAIL_DELAY", 0)
+
+
+def test_workday_fetches_details_only_for_recent_jobs(monkeypatch):
+    ages = ["Posted Today"] * 3 + ["Posted 10 Days Ago"] * 20 + ["Posted Yesterday"] * 2
+    fake = _FakeWorkday(ages)
+    _install(monkeypatch, fake)
+
+    jobs = ss.fetch_workday("acme/wd5/Ext", max_age_days=3)
+
+    assert sorted(fake.detail_calls) == [0, 1, 2, 23, 24], "paged past page one"
+    job = next(j for j in jobs if j["job_key"] == "workday:acme/wd5/Ext:R0")
+    assert job["source"] == "workday"
+    assert job["posted"] == "2026-09-27"
+    assert job["description"].startswith("Build things")
+    assert job["url"].endswith("/Engineer_R0")
+    assert job["location"] == "San Jose; Austin, United States of America"
+
+
+def test_workday_skips_a_job_whose_detail_fails(monkeypatch):
+    fake = _FakeWorkday(["Posted Today"] * 3, broken={1})
+    _install(monkeypatch, fake)
+    keys = {j["job_key"] for j in ss.fetch_workday("acme/wd5/Ext", max_age_days=3)}
+    assert keys == {"workday:acme/wd5/Ext:R0", "workday:acme/wd5/Ext:R2"}
+
+
+def test_workday_board_fails_when_every_detail_fails(monkeypatch):
+    fake = _FakeWorkday(["Posted Today"] * 2, broken={0, 1})
+    _install(monkeypatch, fake)
+    with pytest.raises(requests.HTTPError):
+        ss.fetch_workday("acme/wd5/Ext", max_age_days=3)
+
+
+def test_workday_slug_must_have_three_parts():
+    with pytest.raises(ValueError, match="tenant/wdN/site"):
+        ss.fetch_workday("adobe", max_age_days=3)
+
+
+def test_fetch_passes_the_workday_window(monkeypatch, tmp_path):
+    import argparse
+    seen = {}
+
+    def fake_workday(slug, max_age_days):
+        seen[slug] = max_age_days
+        return []
+
+    monkeypatch.setattr(ss, "DB_PATH", str(tmp_path / "t.db"))
+    monkeypatch.setattr(ss, "FETCHERS", {"workday": fake_workday})
+    companies = tmp_path / "companies.yaml"
+    companies.write_text("companies:\n  workday:\n"
+                         "    - {slug: adobe/wd5/ext, name: Adobe}\n", encoding="utf-8")
+
+    ss.cmd_fetch_jobs(argparse.Namespace(
+        companies=str(companies), replace=True, delay=0, workday_days=7))
+    assert seen == {"adobe/wd5/ext": 7}
+
+
+def test_workday_job_listed_twice_is_fetched_once(monkeypatch):
+    fake = _FakeWorkday(["Posted Today"] * 25)
+    real_post = fake.post
+
+    def post_with_repeat(url, json=None, **kwargs):
+        r = real_post(url, json=json, **kwargs)
+        if json["offset"] == 20:  # unstable ordering repeats a job from page one
+            body = r.json()
+            body["jobPostings"].append({"title": "Engineer 0", "postedOn": "Posted Today",
+                                        "externalPath": "/job/Place/Engineer_R0"})
+            r._content = __import__("json").dumps(body).encode()
+        return r
+
+    fake.post = post_with_repeat
+    _install(monkeypatch, fake)
+    ss.fetch_workday("acme/wd5/Ext", max_age_days=3)
+    assert sorted(fake.detail_calls) == list(range(25))
+
+
+def test_workday_board_fails_when_a_list_page_fails(monkeypatch):
+    fake = _FakeWorkday(["Posted Today"] * 45)
+    real_post = fake.post
+
+    def flaky_post(url, json=None, **kwargs):
+        if json["offset"] == 20:
+            return fake._response({}, status=503)
+        return real_post(url, json=json, **kwargs)
+
+    fake.post = flaky_post
+    _install(monkeypatch, fake)
+    with pytest.raises(requests.HTTPError):
+        ss.fetch_workday("acme/wd5/Ext", max_age_days=3)
+
+
+# --------------------------------------------------------- senior titles
+
+@pytest.mark.parametrize("title, senior", [
+    ("Senior Software Engineer", True),
+    ("Senior Associate", True),
+    ("Program Manager Intern", False),
+    ("Software Engineer", False),
+])
+def test_is_senior_title(title, senior):
+    assert ss.is_senior_title(title) is senior
+
+
+# ------------------------------------------------------------- greenhouse
+
+def _greenhouse(monkeypatch, job):
+    r = requests.Response()
+    r.status_code = 200
+    r._content = json.dumps({"jobs": [{"id": 1, "title": "Engineer", **job}]}).encode()
+    monkeypatch.setattr(requests, "get", lambda *a, **k: r)
+    return ss.fetch_greenhouse("acme")[0]
+
+
+def test_greenhouse_posted_is_first_publication(monkeypatch):
+    """Employers bulk-touch their boards, which bumps updated_at on every job;
+    a 2023 posting would otherwise read as posted this week."""
+    job = _greenhouse(monkeypatch, {"first_published": "2023-12-12T05:19:55-05:00",
+                                    "updated_at": "2026-09-21T13:22:12-04:00"})
+    assert job["posted"] == "2023-12-12"
+
+
+def test_greenhouse_falls_back_to_updated_at(monkeypatch):
+    job = _greenhouse(monkeypatch, {"updated_at": "2026-09-21T13:22:12-04:00"})
+    assert job["posted"] == "2026-09-21"
+
+
+def test_fetch_records_failed_boards(monkeypatch, tmp_path):
+    import argparse
+    import sqlite3
+
+    def dead_board(slug):
+        raise requests.ConnectionError("connection refused")
+
+    monkeypatch.setattr(ss, "DB_PATH", str(tmp_path / "t.db"))
+    monkeypatch.setattr(ss, "FETCHERS", {"lever": dead_board})
+    companies = tmp_path / "companies.yaml"
+    companies.write_text("companies:\n  lever:\n    - {slug: plaid, name: Plaid}\n",
+                         encoding="utf-8")
+
+    ss.cmd_fetch_jobs(argparse.Namespace(
+        companies=str(companies), replace=True, delay=0, workday_days=2))
+
+    con = sqlite3.connect(tmp_path / "t.db")
+    rows = con.execute("SELECT board, error FROM fetch_failures").fetchall()
+    con.close()
+    assert rows == [("lever/plaid", "connection refused")]

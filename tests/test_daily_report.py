@@ -375,3 +375,28 @@ def test_excel_still_matches_the_actual_tool():
     compiled = sdr.build_resume_skills({"skills": {"Excel": 5}})
     matched, _ = sdr.score_skills("Analyst", "Advanced Microsoft Excel required", compiled)
     assert matched == ["Excel"]
+
+
+# ------------------------------------------------------ senior vs early career
+
+@pytest.mark.parametrize("title", [
+    "Technical Program Manager Intern",
+    "Team Lead Intern, Summer 2027",
+    "Product Manager, New Grad",
+    "Solutions Architect - Early Career",
+    "Entry-Level Engineering Manager Apprentice",
+])
+def test_early_career_wording_beats_a_senior_word(title):
+    score, reason, _, _ = sdr.career_level_score(title, "")
+    assert score is not None, reason
+
+
+@pytest.mark.parametrize("title", [
+    "Senior Software Engineer",
+    "Senior Associate, Data",
+    "Lead Data Scientist",
+    "Staff Engineer, Junior Mentorship Program",
+])
+def test_senior_titles_stay_rejected(title):
+    score, reason, _, _ = sdr.career_level_score(title, "")
+    assert score is None and reason == "senior-level title"

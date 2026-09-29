@@ -36,6 +36,7 @@ import sqlite3
 import sys
 import time
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
 import yaml
@@ -108,6 +109,11 @@ CREATE INDEX IF NOT EXISTS idx_jobs_norm ON jobs(company_norm);
 CREATE TABLE IF NOT EXISTS fetched_companies (
     company_norm TEXT PRIMARY KEY,
     fetched_at   TEXT
+);
+CREATE TABLE IF NOT EXISTS fetch_failures (
+    board     TEXT PRIMARY KEY,
+    error     TEXT,
+    failed_at TEXT
 );
 CREATE TABLE IF NOT EXISTS probe_cache (
     provider   TEXT,
@@ -365,7 +371,9 @@ def fetch_greenhouse(slug):
             "job_key": f"greenhouse:{slug}:{j.get('id')}",
             "source": "greenhouse", "title": j.get("title", ""),
             "location": loc, "url": j.get("absolute_url", ""),
-            "posted": (j.get("updated_at") or "")[:10],
+            # updated_at moves whenever the employer bulk-edits its board, so
+            # a years-old posting would read as new. first_published does not.
+            "posted": (j.get("first_published") or j.get("updated_at") or "")[:10],
             "description": html_to_text(j.get("content", "")),
         })
     return out
@@ -408,7 +416,100 @@ def fetch_ashby(slug):
     return out
 
 
-FETCHERS = {"greenhouse": fetch_greenhouse, "lever": fetch_lever, "ashby": fetch_ashby}
+# Workday hosts most large employers, which are most of the DOL filers. Its list
+# endpoint gives titles and a relative "Posted 3 Days Ago", but no description,
+# and the report needs the description for its disqualifier checks. So the list
+# is paged in full (cheap) and details are fetched only for recent postings.
+WORKDAY_MAX_AGE_DAYS = 2  # "Posted 2 Days Ago" can still be inside a 48-hour report
+WORKDAY_PAGE = 20          # the API rejects anything larger
+WORKDAY_DETAIL_DELAY = 0.1  # per request, per worker
+WORKDAY_WORKERS = 4
+_WORKDAY_AGE = re.compile(r"posted\s+(today|yesterday|(\d+)\+?\s+days?\s+ago)", re.I)
+
+
+def workday_age_days(posted_on):
+    """Days since posting from Workday's "Posted N Days Ago" text, or None."""
+    m = _WORKDAY_AGE.search(posted_on or "")
+    if not m:
+        return None
+    word = m.group(1).lower()
+    if word == "today":
+        return 0
+    if word == "yesterday":
+        return 1
+    return int(m.group(2))
+
+
+def fetch_workday(slug, max_age_days=WORKDAY_MAX_AGE_DAYS):
+    """slug is 'tenant/wdN/site', e.g. 'adobe/wd5/external_experienced'."""
+    parts = slug.split("/")
+    if len(parts) != 3:
+        raise ValueError(f"workday slug must be tenant/wdN/site, got '{slug}'")
+    tenant, wd, site = parts
+    api = f"https://{tenant}.{wd}.myworkdayjobs.com/wday/cxs/{tenant}/{site}"
+    headers = {**UA, "Accept": "application/json"}
+
+    def list_page(offset):
+        r = requests.post(f"{api}/jobs", headers=headers, timeout=25, json={
+            "appliedFacets": {}, "limit": WORKDAY_PAGE, "offset": offset,
+            "searchText": ""})
+        r.raise_for_status()
+        time.sleep(WORKDAY_DETAIL_DELAY)
+        return r.json()
+
+    def detail(path):
+        try:
+            return _get_json(f"{api}{path}").get("jobPostingInfo") or {}
+        except (requests.RequestException, ValueError) as exc:
+            return exc
+        finally:
+            time.sleep(WORKDAY_DETAIL_DELAY)
+
+    # The list has no usable sort order, so every page is read. The first page
+    # gives the total; the rest go through a small pool, since a big employer
+    # lists thousands of jobs at 20 a page.
+    first = list_page(0)
+    total = first.get("total") or 0
+    with ThreadPoolExecutor(WORKDAY_WORKERS) as pool:
+        pages = [first] + list(pool.map(list_page, range(WORKDAY_PAGE, total, WORKDAY_PAGE)))
+
+        # Ordering is unstable between requests, so a job can appear twice.
+        recent = {}
+        for page in pages:
+            for j in page.get("jobPostings") or []:
+                age = workday_age_days(j.get("postedOn"))
+                if age is not None and age > max_age_days:
+                    continue
+                recent.setdefault(j.get("externalPath", ""), j)
+        details = list(pool.map(detail, recent))
+
+    out, last_error = [], None
+    for (path, j), info in zip(recent.items(), details):
+        if isinstance(info, Exception):
+            last_error = info
+            continue
+        places = [info.get("location") or ""] + list(info.get("additionalLocations") or [])
+        location = "; ".join(p for p in places if p)
+        country = (info.get("country") or {}).get("descriptor")
+        if country:
+            location = f"{location}, {country}" if location else country
+        out.append({
+            "job_key": f"workday:{slug}:{info.get('jobReqId') or j.get('externalPath')}",
+            "source": "workday", "title": info.get("title") or j.get("title", ""),
+            "location": location, "url": info.get("externalUrl", ""),
+            "posted": (info.get("startDate") or "")[:10],
+            "description": html_to_text(info.get("jobDescription", "")),
+        })
+
+    # One bad detail is skipped; all of them failing means the board is down,
+    # and fetch-jobs must record that rather than an empty board.
+    if recent and not out:
+        raise last_error
+    return out
+
+
+FETCHERS = {"greenhouse": fetch_greenhouse, "lever": fetch_lever, "ashby": fetch_ashby,
+            "workday": fetch_workday}
 
 
 def cmd_fetch_jobs(args):
@@ -419,6 +520,7 @@ def cmd_fetch_jobs(args):
     if args.replace:
         con.execute("DELETE FROM jobs")
         con.execute("DELETE FROM fetched_companies")
+        con.execute("DELETE FROM fetch_failures")
 
     total, failed = 0, []
     for provider, entries in (cfg.get("companies") or {}).items():
@@ -433,9 +535,17 @@ def cmd_fetch_jobs(args):
             else:
                 slug, display = entry, entry
             try:
-                jobs = fetcher(slug)
+                if provider == "workday":
+                    jobs = fetcher(slug, max_age_days=args.workday_days)
+                else:
+                    jobs = fetcher(slug)
             except Exception as exc:
                 failed.append(f"{provider}/{slug}: {exc}")
+                # Read by the notification email, so a dead board is noticed.
+                con.execute("INSERT OR REPLACE INTO fetch_failures VALUES (?, ?, ?)",
+                            (f"{provider}/{slug}", str(exc)[:200],
+                             time.strftime("%Y-%m-%d %H:%M")))
+                con.commit()
                 continue
             rows = [(
                 j["job_key"], j["source"], display, norm_employer(display),
@@ -449,6 +559,8 @@ def cmd_fetch_jobs(args):
             # The report baselines employers it has not tracked before. A board
             # that answered with no postings is tracked all the same, so its
             # first real opening is reported rather than silenced.
+            con.execute("DELETE FROM fetch_failures WHERE board = ?",
+                        (f"{provider}/{slug}",))
             con.execute(
                 "INSERT OR REPLACE INTO fetched_companies VALUES (?, ?)",
                 (norm_employer(display), time.strftime("%Y-%m-%d %H:%M")))
@@ -656,9 +768,12 @@ def cmd_discover(args):
         with open(args.out, encoding="utf-8") as fh:
             existing = (yaml.safe_load(fh) or {}).get("companies") or {}
 
-    merged = {p: list(existing.get(p) or []) for p in PROBE_URLS}
+    # Providers discover cannot probe, such as Workday, are carried over as-is.
+    merged = {p: list(v or []) for p, v in existing.items()}
+    for p in PROBE_URLS:
+        merged.setdefault(p, [])
     seen = {p: {(e.get("slug") if isinstance(e, dict) else e) for e in merged[p]}
-            for p in PROBE_URLS}
+            for p in merged}
     added = 0
     for display, (provider, slug, n, certified) in sorted(
             by_display.items(), key=lambda kv: -kv[1][3]):
@@ -676,7 +791,7 @@ def cmd_discover(args):
                  "# probe, so a listed board definitely exists. It is still possible for\n"
                  "# a guess to land on a DIFFERENT company with a similar name. If a\n"
                  "# company's postings look wrong, delete its line.\n\n")
-        yaml.safe_dump({"companies": {p: merged[p] for p in PROBE_URLS if merged[p]}},
+        yaml.safe_dump({"companies": {p: v for p, v in merged.items() if v}},
                        fh, sort_keys=False, default_flow_style=False)
 
     con.close()
@@ -720,6 +835,19 @@ SENIOR_TITLE = re.compile(
 ENTRY_TITLE = re.compile(
     r"\b(intern|internship|new ?grad|new graduate|university grad|recent grad|"
     r"early career|entry.level|junior|jr\.?|associate|apprentice|i{1,2}\b)\b", re.I)
+
+# Wording that marks a posting as early career even when the title also has a
+# senior word, as in "Program Manager Intern". Stricter than ENTRY_TITLE, which
+# includes "associate" and a bare "II" and would let "Senior Associate" through.
+EARLY_CAREER_TITLE = re.compile(
+    r"\b(intern|internship|new ?grad|new graduate|university grad|recent grad|"
+    r"early career|entry.level|apprentice(?:ship)?)\b", re.I)
+
+
+def is_senior_title(title):
+    title = title or ""
+    return bool(SENIOR_TITLE.search(title)) and not EARLY_CAREER_TITLE.search(title)
+
 
 DISQ_RE = [re.compile(p, re.I) for p in DISQUALIFIERS]
 POS_RE = [re.compile(p, re.I) for p in SPONSOR_POSITIVE]
@@ -780,7 +908,7 @@ def cmd_report(args):
             dropped += 1
             continue
 
-        if not args.include_senior and SENIOR_TITLE.search(title or ""):
+        if not args.include_senior and is_senior_title(title):
             continue
 
         score, why = 0, []
@@ -914,6 +1042,9 @@ def main():
     b.add_argument("--companies", default="companies.yaml")
     b.add_argument("--replace", action="store_true")
     b.add_argument("--delay", type=float, default=0.4, help="Seconds between boards")
+    b.add_argument("--workday-days", type=int, default=WORKDAY_MAX_AGE_DAYS,
+                   help="Fetch Workday postings up to this many days old "
+                        f"(default {WORKDAY_MAX_AGE_DAYS})")
     b.set_defaults(func=cmd_fetch_jobs)
 
     d = sub.add_parser("discover", help="Build companies.yaml from the DOL employer list")

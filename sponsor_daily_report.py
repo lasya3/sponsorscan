@@ -27,7 +27,7 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 from profile_loader import ProfileError, load_profile, describe_profile
-from sponsorscan import HAVE_RAPIDFUZZ, SENIOR_TITLE, match_employer, norm_employer
+from sponsorscan import HAVE_RAPIDFUZZ, is_senior_title, match_employer, norm_employer
 
 DB_PATH = Path(os.environ.get("SPONSORSCAN_DB", "sponsorscan.db"))
 DEFAULT_STATE = Path(".sponsorscan_state.json")
@@ -643,7 +643,7 @@ def career_level_score(title, description, profile=None):
             LEVEL_II_PLUS_TITLE.search(title_text):
         return None, "level II or above title", [], None
 
-    if profile.get("reject_senior_titles", True) and SENIOR_TITLE.search(title_text):
+    if profile.get("reject_senior_titles", True) and is_senior_title(title_text):
         return None, "senior-level title", [], None
 
     if ACADEMIC_ROLE_RE.search(text):
@@ -844,8 +844,8 @@ def parse_posted_datetime(value):
             return None
 
     # Date-only values are handled before the ISO parser, which would read
-    # them as midnight. Greenhouse and Ashby both supply `updated_at` truncated
-    # to 10 characters, so treating those as midnight backdates the posting by
+    # them as midnight. Greenhouse and Ashby dates are stored truncated to 10
+    # characters, so treating those as midnight backdates the posting by
     # up to a day and drops it from the window early. There is no posting time
     # in the data, so assume the end of that UTC day.
     for fmt in ("%Y-%m-%d", "%m/%d/%Y"):
