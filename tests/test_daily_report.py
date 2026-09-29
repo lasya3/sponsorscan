@@ -400,3 +400,25 @@ def test_early_career_wording_beats_a_senior_word(title):
 def test_senior_titles_stay_rejected(title):
     score, reason, _, _ = sdr.career_level_score(title, "")
     assert score is None and reason == "senior-level title"
+
+
+
+# ------------------------------------------------ sponsorship for citizens
+
+HEAVY_FILER = {"certified": 500, "display": "Big Co", "senior_share": 0.6,
+               "titles": ["software engineer"], "trouble_rate": 0.0}
+CITIZEN = {"work_authorization": "us_citizen"}
+
+
+def test_citizen_scores_the_same_with_or_without_filing_history():
+    blob = "Visa sponsorship is available."
+    heavy = sdr.sponsorship_score(HEAVY_FILER, "Software Engineer", blob, profile=CITIZEN)
+    none = sdr.sponsorship_score(None, "Software Engineer", "", profile=CITIZEN)
+    assert heavy[0] == none[0] == sdr.CITIZEN_SPONSORSHIP_POINTS
+
+
+def test_opt_candidate_still_scores_filing_history():
+    opt = {"work_authorization": "opt"}
+    heavy, _ = sdr.sponsorship_score(HEAVY_FILER, "Software Engineer", "", profile=opt)
+    none, _ = sdr.sponsorship_score(None, "Software Engineer", "", profile=opt)
+    assert heavy > none == 0

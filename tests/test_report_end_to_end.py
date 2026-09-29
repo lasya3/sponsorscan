@@ -247,6 +247,40 @@ def test_long_unseen_keys_are_forgotten(workspace):
     assert "recent" in seen
 
 
+def citizen_profile(tmp_path):
+    profile = tmp_path / "citizen.json"
+    profile.write_text(json.dumps({
+        "profile_id": "citizen", "work_authorization": "us_citizen",
+        "reject_citizenship_required": False}), encoding="utf-8")
+    return str(profile)
+
+
+def test_citizen_ranking_ignores_filing_history(workspace, tmp_path):
+    add_job(workspace, 100, "Stripe")  # no LCA history in the fixture
+    run_report(workspace, "--profile", citizen_profile(tmp_path))
+    rows = {r["company"]: r for r in read_csv(workspace / "all.csv")}
+    assert rows["Databricks"]["sponsorship_score"] == rows["Stripe"]["sponsorship_score"]
+    assert int(rows["Databricks"]["lca_certified"]) == 120, "history is still shown"
+
+
+def test_citizen_report_runs_without_lca_data(workspace, tmp_path):
+    con = sqlite3.connect(workspace / "sponsorscan.db")
+    con.execute("DELETE FROM employers")
+    con.commit()
+    con.close()
+    output = run_report(workspace, "--profile", citizen_profile(tmp_path))
+    assert read_csv(workspace / "all.csv")
+    assert "No LCA data" not in output
+
+
+def test_missing_lca_data_warns_a_candidate_who_needs_sponsorship(workspace):
+    con = sqlite3.connect(workspace / "sponsorscan.db")
+    con.execute("DELETE FROM employers")
+    con.commit()
+    con.close()
+    assert "No LCA data" in run_report(workspace)
+
+
 def test_profile_drives_roles_and_tiers(workspace, tmp_path):
     profile = tmp_path / "profile.json"
     profile.write_text(json.dumps({

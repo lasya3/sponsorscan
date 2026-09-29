@@ -26,7 +26,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
-from profile_loader import ProfileError, load_profile, describe_profile
+from profile_loader import ProfileError, load_profile, describe_profile, needs_sponsorship
 from sponsorscan import HAVE_RAPIDFUZZ, is_senior_title, match_employer, norm_employer
 
 DB_PATH = Path(os.environ.get("SPONSORSCAN_DB", "sponsorscan.db"))
@@ -724,7 +724,17 @@ def load_employers(con):
     return output
 
 
-def sponsorship_score(emp, title, blob, fuzzy_confidence=100):
+# What a job scores on sponsorship when the candidate does not need it. Filing
+# history is irrelevant then, so every employer gets the same amount, set near
+# a solid mid-size sponsor so that minimum_score and the priority cutoffs mean
+# the same thing for every profile.
+CITIZEN_SPONSORSHIP_POINTS = 40
+
+
+def sponsorship_score(emp, title, blob, fuzzy_confidence=100, profile=None):
+    if not needs_sponsorship(profile):
+        return CITIZEN_SPONSORSHIP_POINTS, []
+
     score = 0
     signals = []
 
@@ -974,6 +984,10 @@ def main():
     finally:
         con.close()
 
+    if not employers and needs_sponsorship(profile):
+        print("No LCA data loaded, so every sponsorship score is 0 and matches "
+              "rank on resume fit alone. Run `sponsorscan.py load-lca` first.")
+
     employer_keys = list(employers.keys())
     fuzzy_cutoff = args.fuzzy_cutoff if HAVE_RAPIDFUZZ else 0
 
@@ -1048,7 +1062,7 @@ def main():
             company_norm, employers, employer_keys, fuzzy_cutoff)
         emp = employers.get(matched_key) if matched_key else None
         sponsor_points, sponsor_signals = sponsorship_score(
-            emp, title, blob, confidence)
+            emp, title, blob, confidence, profile)
 
         combined_score = resume_fit + level_score + company_points + sponsor_points
         if combined_score < args.min_score:
