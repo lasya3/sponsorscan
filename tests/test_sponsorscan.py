@@ -368,3 +368,48 @@ def test_fetch_records_failed_boards(monkeypatch, tmp_path):
     rows = con.execute("SELECT board, error FROM fetch_failures").fetchall()
     con.close()
     assert rows == [("lever/plaid", "connection refused")]
+
+
+# --------------------------------------------------------------- load-lca
+#
+# The example workflow keeps a cached database and only refreshes it. When the
+# DOL site blocks the runner, the cached employers must survive the attempt.
+
+def _db_with_employer(monkeypatch, tmp_path):
+    import sqlite3
+    monkeypatch.setattr(ss, "DB_PATH", str(tmp_path / "t.db"))
+    con = ss.connect()
+    con.execute("INSERT INTO employers (employer_norm, certified) VALUES ('acme', 5)")
+    con.commit()
+    con.close()
+    return lambda: sqlite3.connect(tmp_path / "t.db").execute(
+        "SELECT COUNT(*) FROM employers").fetchone()[0]
+
+
+def _blocked(*a, **k):
+    r = requests.Response()
+    r.status_code = 403
+    r.url = "https://www.dol.gov/"
+    r.raw = __import__("io").BytesIO(b"")
+    return r
+
+
+def test_blocked_dol_site_keeps_cached_employers(monkeypatch, tmp_path):
+    import argparse
+    count = _db_with_employer(monkeypatch, tmp_path)
+    monkeypatch.setattr(requests, "get", _blocked)
+    with pytest.raises(SystemExit):
+        ss.cmd_load_lca(argparse.Namespace(path=None, latest=True, replace=True))
+    assert count() == 1
+
+
+def test_failed_download_exits_cleanly_and_keeps_employers(monkeypatch, tmp_path):
+    import argparse
+    count = _db_with_employer(monkeypatch, tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(requests, "get", _blocked)
+    with pytest.raises(SystemExit, match="Could not download"):
+        ss.cmd_load_lca(argparse.Namespace(
+            path="https://example.com/LCA_Disclosure_Data_FY2026_Q3.xlsx",
+            latest=False, replace=True))
+    assert count() == 1

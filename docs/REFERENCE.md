@@ -445,6 +445,31 @@ Repository Settings
 
 Never place secret values directly in the workflow YAML.
 
+### When the DOL site blocks the runner
+
+The DOL site sits behind bot protection that rejects GitHub's runners, so
+`load-lca --latest` usually fails there. The workflow handles that. It caches
+the database, tries a refresh on the first run of each month, and keeps using
+the cached copy if the refresh fails. A run fails only when there is no cached
+copy at all, which is the very first run, or when the cache has expired after 7
+days without a run.
+
+To give it a way in, download the latest **LCA Programs (H-1B, H-1B1, E-3)**
+file in a browser, put it somewhere the runner can fetch without logging in,
+and point a repository variable at it:
+
+```text
+Repository Settings
+  -> Secrets and variables
+  -> Actions
+  -> Variables
+  -> LCA_FILE_URL = https://.../LCA_Disclosure_Data_FY2026_Q3.xlsx
+```
+
+For a public repository, a release asset works. The variable is only used when
+`--latest` fails. Update it when you want a newer quarter; until then the cached
+copy keeps the workflow running.
+
 ## Running the offline checks
 
 Neither of these touches the network.

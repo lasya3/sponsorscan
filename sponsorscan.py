@@ -232,11 +232,20 @@ def cmd_load_lca(args):
         import onboarding
         local = onboarding.local_filename_for(src)
         print(f"Downloading {src} -> {local} (this file is typically 100-400 MB)")
-        with requests.get(src, stream=True, headers=UA, timeout=120) as r:
-            r.raise_for_status()
-            with open(local, "wb") as fh:
-                for chunk in r.iter_content(1 << 20):
-                    fh.write(chunk)
+        try:
+            with requests.get(src, stream=True, headers=UA, timeout=120) as r:
+                r.raise_for_status()
+                with open(local, "wb") as fh:
+                    for chunk in r.iter_content(1 << 20):
+                        fh.write(chunk)
+        except requests.RequestException as exc:
+            if os.path.exists(local):
+                os.remove(local)  # a partial file would load as a short dataset
+            # Nothing has been deleted yet, so an existing database is intact.
+            raise SystemExit(
+                f"Could not download {src}: {exc}\n"
+                "The DOL site blocks some networks, including GitHub's runners. "
+                "Download the file in a browser and pass its local path instead.")
         src = local
 
     if not os.path.exists(src):
