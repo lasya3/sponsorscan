@@ -24,6 +24,10 @@ jobs:
       STATE_FILE: .sponsorscan_opt_state.json
       REPORT_HOURS: "48"
       SPONSORSCAN_PROFILE_NAME: "OPT Candidate"
+      # A step's `if:` cannot read secrets, so these record whether the optional
+      # integrations are configured without exposing the values to every step.
+      SHEETS_ENABLED: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON != '' && secrets.GOOGLE_SPREADSHEET_ID != '' }}
+      EMAIL_ENABLED: ${{ secrets.GMAIL_ADDRESS != '' && secrets.GMAIL_APP_PASSWORD != '' && secrets.NOTIFICATION_EMAIL != '' }}
 
     steps:
       - name: Check out repository
@@ -116,18 +120,21 @@ jobs:
             --new-out "$NEW_JOBS_CSV" \
             --state "$STATE_FILE"
 
+      # Skipped until both Sheets secrets exist; see docs/GOOGLE_SHEETS_SETUP.md.
       - name: Update Google Sheet
-        if: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON != '' && secrets.GOOGLE_SPREADSHEET_ID != '' }}
+        if: env.SHEETS_ENABLED == 'true'
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           GOOGLE_SPREADSHEET_ID: ${{ secrets.GOOGLE_SPREADSHEET_ID }}
-          ALL_MATCHES_SHEET: All Matches 48h
-          NEW_JOBS_SHEET: New Jobs 48h
+          ALL_MATCHES_SHEET: All Matches ${{ env.REPORT_HOURS }}h
+          NEW_JOBS_SHEET: New Jobs ${{ env.REPORT_HOURS }}h
         run: |
+          pip install -r requirements-sheets.txt
           python scripts/update_google_sheet.py
 
+      # Skipped until all three email secrets exist; see docs/EMAIL_SETUP.md.
       - name: Email new job matches
-        if: ${{ secrets.GMAIL_ADDRESS != '' && secrets.GMAIL_APP_PASSWORD != '' && secrets.NOTIFICATION_EMAIL != '' }}
+        if: env.EMAIL_ENABLED == 'true'
         env:
           GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}

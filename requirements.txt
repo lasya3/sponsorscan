@@ -4,5 +4,5 @@ openpyxl>=3.1
 rapidfuzz>=3.0
 
 # The Google Sheets integration is optional and its client libraries are not
-# needed to run any sponsorscan command. Install them only if you wire up an
-# uploader:  pip install -r requirements-sheets.txt
+# needed to run any sponsorscan command. Install them only to use
+# scripts/update_google_sheet.py:  pip install -r requirements-sheets.txt

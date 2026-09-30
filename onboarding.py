@@ -92,6 +92,11 @@ LCA_LINK_RE = re.compile(
 EMAIL_ENV = ("GMAIL_ADDRESS", "GMAIL_APP_PASSWORD", "NOTIFICATION_EMAIL")
 SHEETS_ENV = ("GOOGLE_SERVICE_ACCOUNT_JSON", "GOOGLE_SPREADSHEET_ID")
 
+# Installed from requirements-sheets.txt, only by those who use the uploader.
+# google-api-python-client depends on google-auth, so one name covers both;
+# find_spec on a dotted name would raise, not return None, without its parent.
+SHEETS_MODULES = ("googleapiclient",)
+
 
 @dataclass
 class CheckResult:
@@ -207,7 +212,7 @@ def warn_empty_targeting(profile) -> CheckResult:
     return CheckResult("Targeting", "OK", "Roles or skills configured")
 
 
-def warn_notification_env(profile, env) -> CheckResult:
+def warn_notification_env(profile, env, modules=SHEETS_MODULES) -> CheckResult:
     """Notifications are enabled in the profile but unconfigured in the shell."""
     notifications = profile.get("notifications") or {}
     missing = []
@@ -220,6 +225,13 @@ def warn_notification_env(profile, env) -> CheckResult:
         return CheckResult(
             "Notification config", "WARN",
             "Enabled in the profile but unset: " + ", ".join(missing))
+
+    if notifications.get("google_sheets_enabled") and any(
+            importlib.util.find_spec(m) is None for m in modules):
+        return CheckResult(
+            "Notification config", "WARN",
+            "Google Sheets is enabled but its client libraries are not installed",
+            "pip install -r requirements-sheets.txt")
     return CheckResult("Notification config", "OK", "Nothing missing")
 
 

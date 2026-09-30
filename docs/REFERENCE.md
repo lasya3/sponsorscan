@@ -352,33 +352,25 @@ each report:
 - `All Matches 48h`
 - `New Jobs 48h`
 
-A typical uploader reads:
+`scripts/update_google_sheet.py` reads:
 
 ```text
 GOOGLE_SERVICE_ACCOUNT_JSON
 GOOGLE_SPREADSHEET_ID
 ```
 
-from environment variables or GitHub Actions secrets.
+from environment variables or GitHub Actions secrets, plus `ALL_MATCHES_CSV` and
+`NEW_JOBS_CSV` to find the report files.
 
 The Google service account must be given Editor access to the destination
 spreadsheet. Do not commit the service-account JSON file or its contents to the
 repository.
 
-A workflow step can call the uploader after report generation:
-
-```yaml
-- name: Update Google Sheet
-  env:
-    GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-    GOOGLE_SPREADSHEET_ID: ${{ secrets.GOOGLE_SPREADSHEET_ID }}
-  run: python update_google_sheet.py
-```
-
-The uploader itself is not included: every deployment differs, so
-`docs/GOOGLE_SHEETS_SETUP.md` specifies what the script must do rather than
-assuming one implementation. Its client libraries are kept out of the main
-requirements file so that a plain install stays small:
+`--check` confirms the key, the spreadsheet ID and the sharing without writing
+anything. The example workflow runs the uploader after report generation, and
+[GOOGLE_SHEETS_SETUP.md](GOOGLE_SHEETS_SETUP.md) walks through the setup. Its
+client libraries are kept out of the main requirements file so that a plain
+install stays small:
 
 ```powershell
 pip install -r requirements-sheets.txt
@@ -407,16 +399,10 @@ has a wrong slug in `companies.yaml`. The list only rides along on an email that
 is already going out, so a broken board never sends mail on its own. The script
 reads failures from `sponsorscan.db`, or from `SPONSORSCAN_DB` when that is set.
 
-A workflow step can call the sender after the Google Sheets update:
-
-```yaml
-- name: Email new job matches
-  env:
-    GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
-    GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-    NOTIFICATION_EMAIL: ${{ secrets.NOTIFICATION_EMAIL }}
-  run: python send_job_email.py
-```
+`python scripts/send_job_email.py --check` logs in to Gmail without sending,
+which confirms the credentials. The example workflow runs the sender after the
+Google Sheets update, and [EMAIL_SETUP.md](EMAIL_SETUP.md) walks through the
+setup.
 
 Do not commit email passwords, app passwords, recipient addresses, or other
 private configuration to the repository.

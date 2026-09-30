@@ -179,6 +179,7 @@ to validate a profile at the same time.
 | Google Sheets sync | [docs/GOOGLE_SHEETS_SETUP.md](docs/GOOGLE_SHEETS_SETUP.md) |
 | Email notifications | [docs/EMAIL_SETUP.md](docs/EMAIL_SETUP.md) |
 | Running it on a schedule, unattended | [docs/REFERENCE.md](docs/REFERENCE.md#github-actions-automation) |
+| Help from an AI coding assistant | Open the repository in Claude Code, Codex, Cursor or Copilot and ask it to set things up. [AGENTS.md](AGENTS.md) tells it how. |
 
 Before trusting a run, read the
 [caveats](docs/REFERENCE.md#caveats-read-these). An LCA filing is evidence of

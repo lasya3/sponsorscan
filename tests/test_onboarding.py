@@ -174,6 +174,23 @@ def test_enabled_email_with_credentials_does_not_warn():
     assert warn_notification_env(profile, env=env).status == "OK"
 
 
+SHEETS_CONFIGURED = {"GOOGLE_SERVICE_ACCOUNT_JSON": "{}", "GOOGLE_SPREADSHEET_ID": "x"}
+
+
+def test_enabled_sheets_without_its_libraries_warns():
+    profile = {"notifications": {"email_enabled": False, "google_sheets_enabled": True}}
+    result = warn_notification_env(profile, env=SHEETS_CONFIGURED,
+                                   modules=("no_such_module_xyz",))
+    assert result.status == "WARN"
+    assert result.remedy == "pip install -r requirements-sheets.txt"
+
+
+def test_enabled_sheets_with_its_libraries_does_not_warn():
+    profile = {"notifications": {"email_enabled": False, "google_sheets_enabled": True}}
+    assert warn_notification_env(profile, env=SHEETS_CONFIGURED,
+                                 modules=("json",)).status == "OK"
+
+
 def test_disabled_notifications_do_not_warn():
     profile = {"notifications": {"email_enabled": False, "google_sheets_enabled": False}}
     assert warn_notification_env(profile, env={}).status == "OK"

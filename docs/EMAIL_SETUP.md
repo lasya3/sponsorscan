@@ -14,8 +14,10 @@ You need:
 - 2-Step Verification enabled on that Google account;
 - a Gmail App Password;
 - a recipient email address;
-- `send_job_email.py` in the repository;
 - a generated new-jobs CSV file.
+
+The sender ships as `scripts/send_job_email.py`. Its `--check` flag logs in to
+Gmail and stops, so it tests your credentials without sending anything.
 
 Do not use your normal Gmail password in GitHub Actions.
 
@@ -32,7 +34,15 @@ Use a name such as:
 SponsorScan GitHub Actions
 ```
 
-Google will generate a 16-character password. Store that value securely.
+Google will generate a 16-character password. Store that value securely. Google
+displays it in four groups of four; the spaces are optional.
+
+- 2-Step Verification: https://myaccount.google.com/signinoptions/twosv
+- App Passwords: https://myaccount.google.com/apppasswords
+
+If the App Passwords page says the setting is unavailable, 2-Step Verification
+is off, or the account is a work or school account whose administrator has
+disabled App Passwords. A personal Gmail account avoids the second case.
 
 The Gmail address that creates the App Password must be the same address used in
 `GMAIL_ADDRESS`.
@@ -66,53 +76,37 @@ NOTIFICATION_EMAIL=recipient@example.com
 
 Do not include these values directly in workflow YAML or committed files.
 
-## 4. Add the email script
+## 4. What the email script does
 
-Place the sender script in the repository root or under `scripts/`.
+`scripts/send_job_email.py`:
 
-Recommended location:
+1. reads the configured new-jobs CSV;
+2. exits successfully without sending when there are no new jobs;
+3. builds a short summary of up to 20 jobs, with links;
+4. attaches the full CSV;
+5. lists any job boards that failed to fetch;
+6. logs in to Gmail with the App Password and sends to `NOTIFICATION_EMAIL`.
 
-```text
-scripts/send_job_email.py
-```
-
-The script should:
-
-1. read the configured new-jobs CSV;
-2. count data rows;
-3. exit successfully without sending when there are no new jobs;
-4. build a concise email summary;
-5. attach the CSV or include job links in the message;
-6. authenticate with Gmail SMTP using the App Password;
-7. send the message to `NOTIFICATION_EMAIL`.
-
-A no-new-jobs result should not fail the workflow.
+A no-new-jobs result does not fail the workflow.
 
 ## 5. Add the workflow step
 
-If the script is stored under `scripts/`, add this step after report generation:
+`workflows/sponsorscan.example.yml` already includes this step. It skips itself
+until all three secrets exist:
 
 ```yaml
 - name: Email new job matches
+  if: env.EMAIL_ENABLED == 'true'
   env:
     GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
     GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
     NOTIFICATION_EMAIL: ${{ secrets.NOTIFICATION_EMAIL }}
-    NEW_JOBS_CSV: new_jobs_48h.csv
+    EMAIL_SUBJECT_PREFIX: SponsorScan
   run: python scripts/send_job_email.py
 ```
 
-If the script is in the repository root:
-
-```yaml
-- name: Email new job matches
-  env:
-    GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
-    GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-    NOTIFICATION_EMAIL: ${{ secrets.NOTIFICATION_EMAIL }}
-    NEW_JOBS_CSV: new_jobs_48h.csv
-  run: python send_job_email.py
-```
+A step's `if:` cannot read `secrets` directly, so the job computes
+`EMAIL_ENABLED` in its `env:` block. See the example workflow.
 
 Keep the filename consistent with the active profile.
 
@@ -132,16 +126,27 @@ In that case, set `NEW_JOBS_CSV` to the correct profile-specific file.
 
 ## 6. Test locally
 
-Set temporary environment variables in PowerShell:
+Set temporary environment variables in PowerShell. `Read-Host` keeps the App
+Password out of your command history:
 
 ```powershell
 $env:GMAIL_ADDRESS = "sender@gmail.com"
-$env:GMAIL_APP_PASSWORD = "your-app-password"
+$env:GMAIL_APP_PASSWORD = Read-Host "App Password"
 $env:NOTIFICATION_EMAIL = "recipient@example.com"
-$env:NEW_JOBS_CSV = "new_jobs_48h.csv"
 
+python .\scripts\send_job_email.py --check
+```
+
+When the check passes, send a real message from your report:
+
+```powershell
+$env:NEW_JOBS_CSV = "new_jobs_48h.csv"
 python .\scripts\send_job_email.py
 ```
+
+A personalized report names its files after the profile, for example
+`casey_new_jobs_48h.csv`; the profile's `output_files` lists them. Nothing is
+sent when that file has no jobs in it.
 
 These variables apply only to the current PowerShell session.
 
@@ -149,10 +154,11 @@ On macOS or Linux:
 
 ```bash
 export GMAIL_ADDRESS="sender@gmail.com"
-export GMAIL_APP_PASSWORD="your-app-password"
+read -s -p "App Password: " GMAIL_APP_PASSWORD; export GMAIL_APP_PASSWORD
 export NOTIFICATION_EMAIL="recipient@example.com"
-export NEW_JOBS_CSV="new_jobs_48h.csv"
+python scripts/send_job_email.py --check
 
+export NEW_JOBS_CSV="new_jobs_48h.csv"
 python scripts/send_job_email.py
 ```
 
@@ -207,6 +213,7 @@ should create their own repository secrets.
 
 ### Gmail authentication fails
 
+`python scripts/send_job_email.py --check` reproduces the login on its own.
 Confirm all of the following:
 
 - `GMAIL_ADDRESS` is a personal or workspace Gmail account;
@@ -223,7 +230,7 @@ message.
 
 Check whether the new-jobs CSV has any data rows.
 
-A correct sender should skip email when the file contains only its header.
+The sender skips email when the file contains only its header.
 
 Also check:
 

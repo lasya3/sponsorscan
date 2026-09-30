@@ -1,5 +1,5 @@
-# Optional: only needed if you add a Google Sheets uploader.
-# See docs/GOOGLE_SHEETS_SETUP.md, which specifies what that script should do.
+# Optional: only needed for scripts/update_google_sheet.py.
+# See docs/GOOGLE_SHEETS_SETUP.md.
 google-api-python-client>=2.137
 google-auth>=2.32
 google-auth-httplib2>=0.2

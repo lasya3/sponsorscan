@@ -2,6 +2,7 @@
 users look. A wrong slug would otherwise disappear without a trace."""
 
 import importlib.util
+import smtplib
 import sqlite3
 from pathlib import Path
 
@@ -43,3 +44,52 @@ def test_failed_boards_appear_in_both_bodies():
 def test_no_failure_section_when_every_board_answered():
     assert "failed" not in email.build_plain_text([ROW], "Me", "48").lower()
     assert "failed" not in email.build_html([ROW], "Me", "48").lower()
+
+
+# --------------------------------------------------------- setting it up
+
+def test_app_password_pasted_with_googles_spaces_still_works():
+    assert email.normalize_app_password(" abcd efgh ijkl mnop ") == "abcdefghijklmnop"
+
+
+def test_rejected_login_explains_the_app_password():
+    exc = smtplib.SMTPAuthenticationError(535, b"Username and Password not accepted")
+    message = email.explain_smtp_error(exc, "me@gmail.com")
+    assert "me@gmail.com" in message
+    assert "apppasswords" in message
+
+
+def _credentials(monkeypatch):
+    monkeypatch.setenv("GMAIL_ADDRESS", "me@gmail.com")
+    monkeypatch.setenv("GMAIL_APP_PASSWORD", "abcd efgh ijkl mnop")
+    monkeypatch.setenv("NOTIFICATION_EMAIL", "you@example.com")
+
+
+def test_check_logs_in_without_sending(monkeypatch, capsys):
+    _credentials(monkeypatch)
+    logins, sent = [], []
+    monkeypatch.setattr(email, "verify_login",
+                        lambda sender, password, host, port: logins.append(password))
+    monkeypatch.setattr(email, "send_email", lambda **kw: sent.append(kw))
+
+    assert email.main(["--check"]) == 0
+    assert logins == ["abcdefghijklmnop"]
+    assert sent == []
+    assert "Nothing was sent" in capsys.readouterr().out
+
+
+def test_check_explains_a_rejected_login(monkeypatch, capsys):
+    _credentials(monkeypatch)
+
+    def reject(*_args):
+        raise smtplib.SMTPAuthenticationError(535, b"BadCredentials")
+
+    monkeypatch.setattr(email, "verify_login", reject)
+    assert email.main(["--check"]) == 1
+    assert "App Password" in capsys.readouterr().err
+
+
+def test_missing_variable_points_at_the_guide(monkeypatch, capsys):
+    monkeypatch.delenv("GMAIL_ADDRESS", raising=False)
+    assert email.main(["--check"]) == 1
+    assert "docs/EMAIL_SETUP.md" in capsys.readouterr().err
