@@ -43,10 +43,14 @@ SPONSORSCAN_DB
     Database written by fetch-jobs. Boards that failed to fetch are listed at
     the end of the message.
     Default: sponsorscan.db
+
+Run with --check first. It logs in to Gmail and stops, so it confirms the
+credentials without sending anything.
 """
 
 from __future__ import annotations
 
+import argparse
 import csv
 import mimetypes
 import os
@@ -74,9 +78,41 @@ def require_env(name: str) -> str:
     value = os.getenv(name, "").strip()
     if not value:
         raise EmailConfigurationError(
-            f"Required environment variable '{name}' is missing."
+            f"Required environment variable '{name}' is missing. "
+            "See docs/EMAIL_SETUP.md."
         )
     return value
+
+
+def normalize_app_password(value: str) -> str:
+    """Google displays an App Password in four groups of four. The spaces are
+    not part of it, and a copy that keeps them is the usual paste."""
+    return "".join(value.split())
+
+
+def explain_smtp_error(exc: Exception, sender: str) -> str:
+    """Turn a login failure into the step that fixes it."""
+    if isinstance(exc, smtplib.SMTPAuthenticationError):
+        return (
+            f"Gmail rejected the login for {sender}. GMAIL_APP_PASSWORD must be "
+            "a 16-character App Password created while signed in as that same "
+            "account, with 2-Step Verification turned on. Your normal Gmail "
+            "password does not work. Create one at "
+            "https://myaccount.google.com/apppasswords"
+        )
+    return f"{type(exc).__name__}: {exc}"
+
+
+def verify_login(
+    sender: str,
+    app_password: str,
+    smtp_host: str,
+    smtp_port: int,
+) -> None:
+    """Log in and disconnect, sending nothing."""
+    context = ssl.create_default_context()
+    with smtplib.SMTP_SSL(smtp_host, smtp_port, context=context, timeout=30) as smtp:
+        smtp.login(sender, app_password)
 
 
 def load_rows(path: Path) -> list[dict[str, str]]:
@@ -345,10 +381,22 @@ def send_email(
         smtp.send_message(message)
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Email SponsorScan's newly discovered jobs.")
+    parser.add_argument(
+        "--check", action="store_true",
+        help="Log in to Gmail to confirm the credentials, without sending")
+    return parser
+
+
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
+    sender = ""
+
     try:
         sender = require_env("GMAIL_ADDRESS")
-        app_password = require_env("GMAIL_APP_PASSWORD")
+        app_password = normalize_app_password(require_env("GMAIL_APP_PASSWORD"))
         recipient = require_env("NOTIFICATION_EMAIL")
 
         csv_path = Path(os.getenv("NEW_JOBS_CSV", DEFAULT_CSV)).expanduser()
@@ -363,6 +411,12 @@ def main() -> int:
         ).strip() or "SponsorScan"
         smtp_host = os.getenv("SMTP_HOST", DEFAULT_SMTP_HOST).strip()
         smtp_port = int(os.getenv("SMTP_PORT", str(DEFAULT_SMTP_PORT)))
+
+        if args.check:
+            verify_login(sender, app_password, smtp_host, smtp_port)
+            print(f"Logged in to {smtp_host} as {sender}. Emails will go to "
+                  f"{recipient}. Check passed. Nothing was sent.")
+            return 0
 
         rows = load_rows(csv_path)
 
@@ -402,12 +456,15 @@ def main() -> int:
         )
         return 0
 
+    except smtplib.SMTPException as exc:
+        print(f"Email notification failed: {explain_smtp_error(exc, sender)}",
+              file=sys.stderr)
+        return 1
     except (
         EmailConfigurationError,
         FileNotFoundError,
         ValueError,
         OSError,
-        smtplib.SMTPException,
     ) as exc:
         print(f"Email notification failed: {exc}", file=sys.stderr)
         return 1

@@ -15,8 +15,12 @@ You need:
 - a Google service account;
 - a service-account JSON key;
 - a Google spreadsheet shared with the service-account email;
-- `update_google_sheet.py` in the repository;
+- the client libraries: `pip install -r requirements-sheets.txt`;
 - generated report CSV files.
+
+The uploader ships as `scripts/update_google_sheet.py`. Its `--check` flag tests
+every step below without writing to the sheet, so run it whenever you finish a
+step and are unsure it worked.
 
 Do not commit the service-account JSON file or its contents.
 
@@ -99,8 +103,12 @@ the spreadsheet ID is:
 ```
 
 Share the spreadsheet with the service-account email and grant it Editor access.
+Viewer access is not enough. Untick "Notify people", because the address has no
+inbox.
 
 The service account cannot update the sheet until it has access.
+
+The uploader also accepts the full spreadsheet URL in place of the ID.
 
 ## 6. Add GitHub Actions secrets
 
@@ -124,45 +132,52 @@ Paste the entire JSON object into `GOOGLE_SERVICE_ACCOUNT_JSON`.
 
 Do not upload the JSON key file into the repository.
 
-## 7. Add the uploader script
+## 7. What the uploader does
 
-Recommended location:
+`scripts/update_google_sheet.py`:
 
-```text
-scripts/update_google_sheet.py
-```
+1. reads the all-matches and new-jobs CSV files;
+2. authenticates with the service-account key;
+3. creates the worksheet tabs if they do not exist, and enlarges them when a
+   report outgrows them;
+4. clears each tab and writes the CSV header and rows;
+5. freezes the header row;
+6. exits with the step that fixes it when something is misconfigured.
 
-The script should:
-
-1. read the all-matches CSV;
-2. read the new-matches CSV;
-3. authenticate with the service-account JSON;
-4. create worksheet tabs if they do not exist;
-5. clear old worksheet contents;
-6. write the CSV headers and rows;
-7. freeze the header row;
-8. exit with a clear error if required environment variables are missing.
-
-Recommended worksheet names:
+The default tab names are:
 
 ```text
 All Matches 48h
 New Jobs 48h
 ```
 
+Set `ALL_MATCHES_SHEET` and `NEW_JOBS_SHEET` to use others.
+
+Both tabs are replaced on every run, so anything typed into them is lost. Keep
+notes, such as which jobs you applied to, in a tab of your own.
+
+Numbers are written as numbers so the score columns sort correctly. Every other
+value is written as plain text, so a job title that begins with `=` is never
+run as a formula.
+
 ## 8. Add the workflow step
 
-If the uploader is stored under `scripts/`:
+`workflows/sponsorscan.example.yml` already includes this step. It skips itself
+until both secrets exist:
 
 ```yaml
 - name: Update Google Sheet
+  if: env.SHEETS_ENABLED == 'true'
   env:
     GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
     GOOGLE_SPREADSHEET_ID: ${{ secrets.GOOGLE_SPREADSHEET_ID }}
-    ALL_MATCHES_CSV: matches_48h.csv
-    NEW_JOBS_CSV: new_jobs_48h.csv
-  run: python scripts/update_google_sheet.py
+  run: |
+    pip install -r requirements-sheets.txt
+    python scripts/update_google_sheet.py
 ```
+
+A step's `if:` cannot read `secrets` directly, so the job computes
+`SHEETS_ENABLED` in its `env:` block. See the example workflow.
 
 Keep the filenames consistent with the active profile.
 
@@ -182,49 +197,54 @@ opt_new_jobs_48h.csv
 
 Set `ALL_MATCHES_CSV` and `NEW_JOBS_CSV` accordingly.
 
-## 9. Add required Python packages
+## 9. Install the client libraries
 
-The exact dependencies depend on the uploader implementation.
-
-A common setup uses:
-
-```text
-google-api-python-client
-google-auth
-google-auth-httplib2
-```
-
-Add the required packages to `requirements.txt`, then install them:
+They are kept out of `requirements.txt` so a plain install stays small:
 
 ```powershell
-pip install -r requirements.txt
+pip install -r requirements-sheets.txt
 ```
 
 ## 10. Test locally
 
-Set temporary environment variables in PowerShell:
+Save the downloaded key in the repository root as `service-account.json`.
+`.gitignore` already excludes that name. `GOOGLE_SERVICE_ACCOUNT_JSON` accepts
+either the key's contents or a path to it.
+
+In PowerShell:
 
 ```powershell
-$env:GOOGLE_SERVICE_ACCOUNT_JSON = Get-Content `
-  "C:\path\to\service-account.json" -Raw
+$env:GOOGLE_SERVICE_ACCOUNT_JSON = "service-account.json"
+$env:GOOGLE_SPREADSHEET_ID = "your-spreadsheet-id-or-url"
 
-$env:GOOGLE_SPREADSHEET_ID = "your-spreadsheet-id"
+python .\scripts\update_google_sheet.py --check
+```
+
+`--check` prints the service-account email, confirms the key, the API, the
+spreadsheet ID and Editor access, and writes nothing. When it passes, point it
+at your report files and run it for real:
+
+```powershell
 $env:ALL_MATCHES_CSV = "matches_48h.csv"
 $env:NEW_JOBS_CSV = "new_jobs_48h.csv"
 
 python .\scripts\update_google_sheet.py
 ```
 
+A personalized report names its files after the profile, for example
+`casey_matches_48h.csv`; the profile's `output_files` lists them.
+
 These values apply only to the current PowerShell session.
 
 On macOS or Linux:
 
 ```bash
-export GOOGLE_SERVICE_ACCOUNT_JSON="$(cat /path/to/service-account.json)"
-export GOOGLE_SPREADSHEET_ID="your-spreadsheet-id"
+export GOOGLE_SERVICE_ACCOUNT_JSON="service-account.json"
+export GOOGLE_SPREADSHEET_ID="your-spreadsheet-id-or-url"
+python scripts/update_google_sheet.py --check
+
 export ALL_MATCHES_CSV="matches_48h.csv"
 export NEW_JOBS_CSV="new_jobs_48h.csv"
-
 python scripts/update_google_sheet.py
 ```
 
@@ -265,6 +285,9 @@ Do not let one profile overwrite another profile's worksheet tabs.
 
 ## Troubleshooting
 
+Run `python scripts/update_google_sheet.py --check` first. Its error message
+names the cause and the fix for each case below.
+
 ### Permission denied
 
 Confirm that the spreadsheet is shared with the exact service-account email and
@@ -292,31 +315,16 @@ For debugging:
   run: ls -la
 ```
 
-### A worksheet cannot be created
+### The Sheets API is not enabled
 
-When using the Google Sheets batch update API, the frozen row setting belongs
-inside `gridProperties`.
+The API was enabled in a different Google Cloud project from the one that owns
+the service account. The error message links to the enable page for the right
+project.
 
-Correct structure:
+### The key is not a service-account key
 
-```python
-{
-    "addSheet": {
-        "properties": {
-            "title": sheet_name,
-            "gridProperties": {
-                "frozenRowCount": 1
-            }
-        }
-    }
-}
-```
-
-Placing `frozenRowCount` directly under `properties` causes an API error.
-
-### Existing data remains after an update
-
-The uploader should clear the worksheet before writing the new CSV contents.
+An OAuth client ID file (it starts with `{"installed":` or `{"web":`) looks
+similar but does not work. Create the key from the service account's Keys tab.
 
 ### The service-account email is being used for Gmail
 
