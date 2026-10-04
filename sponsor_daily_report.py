@@ -547,6 +547,8 @@ NON_US = {
     # Regions that are not the US but read as "remote-friendly".
     "europe", "emea", "apac", "latam", "worldwide", "anywhere in the world",
 }
+# Whole words only, so "india" does not match "Indiana" or "Indianapolis".
+NON_US_RE = re.compile(r"\b(?:" + "|".join(sorted(map(re.escape, NON_US))) + r")\b")
 
 US_EXPLICIT = (
     "united states", "usa", "u.s.", "remote - us", "remote, us", "remote us",
@@ -565,7 +567,7 @@ def is_us_location(location):
     loc = (location or "").strip().lower()
     if not loc:
         return False
-    if any(term in loc for term in NON_US):
+    if NON_US_RE.search(loc):
         return False
     if any(term in loc for term in US_EXPLICIT):
         return True
