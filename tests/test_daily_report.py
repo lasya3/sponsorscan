@@ -107,6 +107,8 @@ def test_postdoc_and_faculty_always_rejected():
     "Seattle, Washington",
     "United States",
     "CA",
+    "Indianapolis, Indiana",  # "india" must not read as a foreign country
+    "Indiana - Indianapolis; Texas - Austin",
 ])
 def test_us_locations(location):
     assert sdr.is_us_location(location) is True

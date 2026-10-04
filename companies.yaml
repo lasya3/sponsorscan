@@ -22,25 +22,22 @@ companies:
     - {slug: stripe, name: Stripe}
     - {slug: airbnb, name: Airbnb}
     - {slug: robinhood, name: Robinhood Markets}
-    - {slug: doordash, name: DoorDash}
+    - {slug: doordashusa, name: DoorDash}
     - {slug: instacart, name: Maplebear}          # Instacart files as Maplebear Inc
     - {slug: samsara, name: Samsara}
-    - {slug: benchling, name: Benchling}
     - {slug: gitlab, name: GitLab}
     - {slug: cloudflare, name: Cloudflare}
-
-  lever:
-    - {slug: netflix, name: Netflix}
-    - {slug: plaid, name: Plaid}
     - {slug: nuro, name: Nuro}
     - {slug: attentive, name: Attentive Mobile}
+    - {slug: vercel, name: Vercel}
 
   ashby:
     - {slug: openai, name: OpenAI}
     - {slug: ramp, name: Ramp Business Corporation}
     - {slug: notion, name: Notion Labs}
     - {slug: linear, name: Linear Orbit}
-    - {slug: vercel, name: Vercel}
+    - {slug: benchling, name: Benchling}
+    - {slug: plaid, name: Plaid}
 
   # Large employers, which file most LCAs, post on Workday. Fetching reads
   # every listing but only opens postings from the last few days; see
@@ -59,6 +56,7 @@ companies:
     - {slug: autodesk/wd1/Ext, name: Autodesk}
     - {slug: hp/wd5/ExternalCareerSite, name: HP}
     - {slug: cisco/wd5/cisco_careers, name: Cisco Systems}
+    - {slug: netflix/wd108/netflix, name: Netflix}
 
 # Cap-exempt employers (universities, university-affiliated nonprofits, national
 # labs) often run Workday too, so their boards can be added the same way.
