@@ -1,0 +1,182 @@
+name: SponsorScan
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Once a day at 13:00 UTC: 9:00 AM Eastern during daylight time, 8:00 AM in
+    # winter. GitHub cron uses UTC.
+    - cron: "0 13 * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      PROFILE_PATH: profiles/lasya.json
+      ALL_MATCHES_CSV: lasya_matches_48h.csv
+      NEW_JOBS_CSV: lasya_new_jobs_48h.csv
+      STATE_FILE: .sponsorscan_lasya_state.json
+      REPORT_HOURS: "48"
+      SPONSORSCAN_PROFILE_NAME: "Lasya"
+      # A step's `if:` cannot read secrets, so these record whether the optional
+      # integrations are configured without exposing the values to every step.
+      SHEETS_ENABLED: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON != '' && secrets.GOOGLE_SPREADSHEET_ID != '' }}
+      EMAIL_ENABLED: ${{ secrets.GMAIL_ADDRESS != '' && secrets.GMAIL_APP_PASSWORD != '' && secrets.NOTIFICATION_EMAIL != '' }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Personal profiles are gitignored, so the profile lives in the
+      # PROFILE_JSON secret rather than in this public repository.
+      - name: Write profile from secret
+        env:
+          PROFILE_JSON: ${{ secrets.PROFILE_JSON }}
+        run: |
+          if [ -z "$PROFILE_JSON" ]; then
+            echo "::error::Add the PROFILE_JSON repository secret (the contents of $PROFILE_PATH)."
+            exit 1
+          fi
+          printf '%s' "$PROFILE_JSON" > "$PROFILE_PATH"
+
+      # Citizens and permanent residents need no sponsorship, so their reports
+      # ignore LCA data and the three LCA steps below are skipped.
+      - name: Check whether the profile needs LCA data
+        id: profile
+        run: |
+          python -c "from profile_loader import load_profile, needs_sponsorship; print('lca=' + str(needs_sponsorship(load_profile('$PROFILE_PATH'))).lower())" >> "$GITHUB_OUTPUT"
+
+      # The LCA data changes quarterly, so the cache is keyed by month: the first
+      # run of each month tries a refresh, and the rest reuse it. The older
+      # sponsorscan-db- prefix is kept so an existing cache carries over.
+      - name: Compute LCA cache key
+        id: lca-key
+        run: echo "key=sponsorscan-lca-${{ runner.os }}-$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore SponsorScan database cache
+        id: db-cache
+        if: steps.profile.outputs.lca == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: sponsorscan.db
+          key: ${{ steps.lca-key.outputs.key }}
+          restore-keys: |
+            sponsorscan-lca-${{ runner.os }}-
+            sponsorscan-db-${{ runner.os }}-
+
+      - name: Load LCA data
+        id: load-lca
+        if: steps.profile.outputs.lca == 'true' && steps.db-cache.outputs.cache-hit != 'true'
+        # --latest resolves the newest disclosure file from the DOL site. The
+        # DOL site blocks some networks, GitHub's runners included, so when it
+        # fails the step falls back to LCA_FILE_URL (a repository variable
+        # pointing at a copy you downloaded in a browser), then to the cached
+        # database from an earlier month. It fails only with no data at all.
+        # Nothing is deleted before a download succeeds, so a failed refresh
+        # leaves the cached copy intact.
+        env:
+          LCA_FILE_URL: ${{ vars.LCA_FILE_URL }}
+          CACHED_KEY: ${{ steps.db-cache.outputs.cache-matched-key }}
+        run: |
+          if python sponsorscan.py load-lca --latest --replace; then
+            echo "fresh=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -n "$LCA_FILE_URL" ] && python sponsorscan.py load-lca "$LCA_FILE_URL" --replace; then
+            echo "fresh=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -n "$CACHED_KEY" ]; then
+            echo "::warning::Could not refresh the LCA data. Using the cached copy ($CACHED_KEY)."
+            exit 0
+          fi
+          echo "::error::No LCA data. The DOL site could not be reached and no cached copy exists. Set the LCA_FILE_URL repository variable; see docs/REFERENCE.md."
+          exit 1
+
+      - name: Save SponsorScan database cache
+        if: steps.load-lca.outputs.fresh == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: sponsorscan.db
+          key: ${{ steps.lca-key.outputs.key }}
+
+      - name: Fetch current job postings
+        run: |
+          python sponsorscan.py fetch-jobs --replace
+
+      - name: Generate personalized report
+        run: |
+          python sponsor_daily_report.py \
+            --profile "$PROFILE_PATH" \
+            --hours "$REPORT_HOURS" \
+            --out "$ALL_MATCHES_CSV" \
+            --new-out "$NEW_JOBS_CSV" \
+            --state "$STATE_FILE"
+
+      # Skipped until both Sheets secrets exist; see docs/GOOGLE_SHEETS_SETUP.md.
+      - name: Update Google Sheet
+        if: env.SHEETS_ENABLED == 'true'
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_SPREADSHEET_ID: ${{ secrets.GOOGLE_SPREADSHEET_ID }}
+          ALL_MATCHES_SHEET: All Matches ${{ env.REPORT_HOURS }}h
+          NEW_JOBS_SHEET: New Jobs ${{ env.REPORT_HOURS }}h
+        run: |
+          pip install -r requirements-sheets.txt
+          python scripts/update_google_sheet.py
+
+      # Skipped until all three email secrets exist; see docs/EMAIL_SETUP.md.
+      - name: Email new job matches
+        if: env.EMAIL_ENABLED == 'true'
+        env:
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          NOTIFICATION_EMAIL: ${{ secrets.NOTIFICATION_EMAIL }}
+          EMAIL_SUBJECT_PREFIX: SponsorScan
+        run: |
+          python scripts/send_job_email.py
+
+      - name: Upload report artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sponsorscan-reports-${{ github.run_number }}
+          path: |
+            ${{ env.ALL_MATCHES_CSV }}
+            ${{ env.NEW_JOBS_CSV }}
+          if-no-files-found: error
+          retention-days: 14
+
+      # The state file matches a .gitignore pattern, so it needs `add -f`, and
+      # `git diff` alone would never see it change.
+      - name: Commit updated state
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -f "$STATE_FILE"
+          if git diff --cached --quiet; then
+            echo "State file did not change."
+            exit 0
+          fi
+
+          git commit -m "chore: update SponsorScan state"
+
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
