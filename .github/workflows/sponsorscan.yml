@@ -3,9 +3,9 @@ name: SponsorScan
 on:
   workflow_dispatch:
   schedule:
-    # Once a day at 13:00 UTC: 9:00 AM Eastern during daylight time, 8:00 AM in
-    # winter. GitHub cron uses UTC.
-    - cron: "0 13 * * *"
+    # Every hour, at 17 minutes past. GitHub queues many jobs on the hour, so an
+    # off-peak minute starts closer to on time.
+    - cron: "17 * * * *"
 
 permissions:
   contents: write
@@ -143,8 +143,12 @@ jobs:
           python scripts/update_google_sheet.py
 
       # Skipped until all three email secrets exist; see docs/EMAIL_SETUP.md.
+      # A failed send shows as a warning instead of failing the run, so the
+      # artifacts upload and the seen-jobs state is still saved; otherwise every
+      # hourly run would report the same jobs as new.
       - name: Email new job matches
         if: env.EMAIL_ENABLED == 'true'
+        continue-on-error: true
         env:
           GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
